@@ -1,6 +1,6 @@
 {
   "name": "recut",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "author": "catsu-byte",
   "description": "Reference-guided 30-second gaming montage editor for DaVinci Resolve Free.",
@@ -22,12 +22,14 @@
     "asarUnpack": [
       "node_modules/ffmpeg-static/ffmpeg.exe",
       "node_modules/ffprobe-static/bin/win32/x64/ffprobe.exe",
-      "scripts/*.py"
+      "scripts/*.py",
+      "assets/fonts/**/*"
     ],
     "files": [
       "dist/**/*",
       "electron/**/*",
       "scripts/*.py",
+      "assets/fonts/**/*",
       "package.json",
       "!node_modules/ffprobe-static/bin/darwin/**/*",
       "!node_modules/ffprobe-static/bin/linux/**/*",

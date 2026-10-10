@@ -160,9 +160,9 @@ test("ASS output uses a boxed bottom caption and animated keyword style", () => 
     keywords: [{ text: "GOTT", start: 1.4, end: 2 }]
   }, { width: 640, height: 360 });
   assert.match(ass, /Style: Caption,Arial,19,[^\n]+,3,4,0,2/);
-  assert.match(ass, /Style: KeywordGlow,Impact/);
-  assert.match(ass, /\\fscx35.*\\t\(0,105,\\fscx128/);
-  assert.match(ass, /Dialogue: 2,0:00:01\.40,0:00:02\.00,Keyword/);
+  assert.match(ass, /Style: KeywordGlow,Anton/);
+  assert.match(ass, /\\fscx20.*\\t\(0,90,\\fscx142/);
+  assert.match(ass, /Dialogue: 3,0:00:01\.40,0:00:02\.00,Keyword/);
 });
 
 test("lyric captions use song timestamps and promote words near impacts", () => {
@@ -176,5 +176,24 @@ test("lyric captions use song timestamps and promote words near impacts", () => 
   ] }] };
   const result = createLyricCaptionPlan(plan, transcript);
   assert.equal(result.captions[0].text, "Everything fine");
+  assert.equal(result.captions[0].start, 0);
+  assert.equal(result.captions[0].end, 4);
   assert.equal(result.keywords[0].text, "FINE");
+});
+
+test("lyric captions cover silent gaps without overlapping", () => {
+  const plan = [{
+    index: 0, timelineStart: 0, duration: 6, sourcePath: "clip.mp4",
+    sourceStart: 0, sourceDuration: 6, speed: 1, impactTime: 3
+  }];
+  const transcript = { segments: [{ words: [
+    { text: "First", start: 0.7, end: 1, probability: 0.9 },
+    { text: "line", start: 1.1, end: 1.4, probability: 0.9 },
+    { text: "Second", start: 3.2, end: 3.5, probability: 0.9 },
+    { text: "line", start: 3.6, end: 3.9, probability: 0.9 }
+  ] }] };
+  const { captions } = createLyricCaptionPlan(plan, transcript);
+  assert.equal(captions[0].start, 0);
+  assert.equal(captions[0].end, captions[1].start);
+  assert.equal(captions[1].end, 6);
 });

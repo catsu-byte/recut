@@ -206,8 +206,11 @@ function effectFilters(effectOrSegment, base, width, height, duration) {
   const impact = clamp((segment.impactTime - segment.sourceStart) / Math.max(segment.speed || 1, 0.01), 0.04, Math.max(0.05, duration - 0.04));
   const hitStart = Math.max(0, impact - 0.055).toFixed(3);
   const hitEnd = Math.min(duration, impact + 0.16).toFixed(3);
+  const preStart = Math.max(0, impact - 0.48).toFixed(3);
+  const preEnd = Math.max(0.02, impact).toFixed(3);
   const grade = "hqdn3d=0.7:0.7:2.8:2.8,unsharp=5:5:1.15:3:3:0.3,eq=saturation=0.74:contrast=1.055:gamma=0.98,vignette=PI/5.7";
-  const impactStack = `scale=${width + 32}:${height + 18},crop=${width}:${height}:x='(in_w-out_w)/2+if(between(t,${hitStart},${hitEnd}),7*sin(92*t),0)':y='(in_h-out_h)/2+if(between(t,${hitStart},${hitEnd}),5*cos(79*t),0)',rgbashift=rh=4:bh=-4:edge=wrap:enable='between(t,${hitStart},${hitEnd})',gblur=sigma=1.1:enable='between(t,${hitStart},${impact.toFixed(3)})',eq=brightness=0.24:enable='between(t,${impact.toFixed(3)},${Math.min(duration, impact + 0.075).toFixed(3)})'`;
+  const preKillFade = `eq=brightness='if(between(t,${preStart},${preEnd}),-0.17*(t-${preStart})/max(${(impact - Number(preStart)).toFixed(3)}\\,0.02),0)':saturation='if(between(t,${preStart},${preEnd}),1-0.88*(t-${preStart})/max(${(impact - Number(preStart)).toFixed(3)}\\,0.02),1)':eval=frame`;
+  const impactStack = `${preKillFade},scale=${width + 32}:${height + 18},crop=${width}:${height}:x='(in_w-out_w)/2+if(between(t,${hitStart},${hitEnd}),7*sin(92*t),0)':y='(in_h-out_h)/2+if(between(t,${hitStart},${hitEnd}),5*cos(79*t),0)',rgbashift=rh=5:bh=-5:edge=wrap:enable='between(t,${hitStart},${hitEnd})',gblur=sigma=1.15:enable='between(t,${hitStart},${impact.toFixed(3)})',eq=brightness=0.3:enable='between(t,${impact.toFixed(3)},${Math.min(duration, impact + 0.075).toFixed(3)})'`;
   if (effect === "impact") return `${base},${speed},${grade},${impactStack}`;
   if (effect === "glitch") {
     const pulseStart = Math.max(0.05, duration * 0.64).toFixed(3);
@@ -249,10 +252,13 @@ async function concatenate(plan, outputPath, audioPath, audioOffset, duration, w
 
 async function burnCaptions(inputPath, outputPath, captionsPath) {
   const filterPath = captionsPath.replaceAll("\\", "/").replace(":", "\\:").replaceAll("'", "\\'");
+  const appRoot = path.resolve(__dirname, "..", "..");
+  const unpackedRoot = appRoot.includes("app.asar") ? appRoot.replace("app.asar", "app.asar.unpacked") : appRoot;
+  const fontsPath = path.join(unpackedRoot, "assets", "fonts").replaceAll("\\", "/").replace(":", "\\:").replaceAll("'", "\\'");
   await run(FFMPEG, [
     "-hide_banner", "-loglevel", "error", "-y",
     "-i", inputPath,
-    "-vf", `ass='${filterPath}'`,
+    "-vf", `ass='${filterPath}':fontsdir='${fontsPath}'`,
     "-map", "0:v:0", "-map", "0:a:0?",
     "-c:v", "libx264", "-preset", "medium", "-crf", "16",
     "-c:a", "copy", "-movflags", "+faststart", outputPath

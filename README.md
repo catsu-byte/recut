@@ -14,9 +14,10 @@ ReCut is a local-first desktop tool that turns pre-selected gaming highlights in
 - One intentional macro shot per selected highlight, ending just after the detected impact
 - Spectral music matching, resilient to bass boosts and game audio
 - Local song transcription with word timestamps
-- White lyric captions on a black background
-- Layered, colored kinetic keywords timed to gameplay impacts
-- Reference-cut subdivision, RGB split, flash, micro-shake, push and drift effects
+- Continuous white lyric captions on a black background
+- Layered, colored kinetic keywords with bundled Anton and Permanent Marker typography
+- Pre-impact grayscale pullback followed by RGB split, flash and micro-shake
+- Reference-cut subdivision, push, drift and glitch effects
 - Lanczos HD delivery, controlled sharpening and reduced saturation
 - 16:9 and 9:16 output
 - H.264 preview render with matched music and original clip audio
@@ -47,7 +48,7 @@ Choose one reference edit and one or more gaming clips. An optional music file c
 3. Select `recut-timeline.fcpxml` from the generated output folder.
 4. Relink the generated `segments` folder if Resolve asks for media locations.
 
-The generated `recut-preview.mp4` includes burned-in styled captions. `recut-captions.ass` is the editable subtitle sidecar. The imported timeline contains the individually rendered segments so the order and timing remain editable.
+The generated `recut-preview.mp4` includes burned-in styled captions. Captions stay visible between detected lyric phrases so the lower subtitle strip remains continuous. `recut-captions.ass` is the editable subtitle sidecar. The imported timeline contains the individually rendered segments so the order and timing remain editable.
 
 Lyric text is transcribed from the selected local audio file; ReCut does not scrape copyrighted lyric sites. Review `recut-captions.ass` when exact published wording is required.
 

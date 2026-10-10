@@ -21,7 +21,7 @@ app.innerHTML = `
         <span class="brand-mark"><i></i><i></i><i></i></span>
         <span>ReCut</span>
       </a>
-      <div class="top-meta"><span class="status-dot"></span> Local processing <span class="version">v0.3</span></div>
+      <div class="top-meta"><span class="status-dot"></span> Local processing <span class="version">v0.4</span></div>
     </header>
 
     <main>

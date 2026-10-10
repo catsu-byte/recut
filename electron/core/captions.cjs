@@ -26,7 +26,11 @@ function mapWordsToTimeline(plan, transcripts) {
 
 function createCaptionPlan(plan, transcripts) {
   const words = mapWordsToTimeline(plan, transcripts);
-  const captions = groupWords(words).filter((caption) => caption.words.length > 1 || keywordText(caption.text).length >= 4);
+  const duration = Math.max(...plan.map((segment) => segment.timelineStart + segment.duration), 0);
+  const captions = fillCaptionGaps(
+    groupWords(words).filter((caption) => caption.words.length > 1 || keywordText(caption.text).length >= 4),
+    duration
+  );
   const keywords = plan.flatMap((segment) => {
     const impact = segment.timelineStart + (segment.impactTime - segment.sourceStart) / segment.speed;
     const candidates = words
@@ -54,7 +58,11 @@ function createLyricCaptionPlan(plan, transcript) {
       end: Math.max(word.start + 0.03, word.end)
     }))
     .sort((a, b) => a.start - b.start);
-  const captions = groupWords(words).filter((caption) => caption.words.length > 1 || keywordText(caption.text).length >= 4);
+  const duration = Math.max(...plan.map((segment) => segment.timelineStart + segment.duration), 0);
+  const captions = fillCaptionGaps(
+    groupWords(words).filter((caption) => caption.words.length > 1 || keywordText(caption.text).length >= 4),
+    duration
+  );
   const keywords = plan.flatMap((segment) => {
     const impact = clamp(
       segment.timelineStart + (segment.impactTime - segment.sourceStart) / segment.speed,
@@ -115,8 +123,9 @@ WrapStyle: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,Arial,${baseSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&HDA000000,-1,0,0,0,100,100,0,0,3,4,0,2,28,28,${bottomMargin},1
-Style: KeywordGlow,Impact,${keywordSize},&H507E62FF,&H507E62FF,&H407E62FF,&H00000000,-1,0,0,0,100,100,1.6,0,1,9,0,5,20,20,20,1
-Style: Keyword,Impact,${keywordSize},&H00FFFFFF,&H00FFFFFF,&H00100818,&H804C35FF,-1,0,0,0,100,100,1.6,0,1,2,6,5,20,20,20,1
+Style: KeywordBack,Anton,${keywordSize},&H8043289A,&H8043289A,&H80301B70,&H00000000,-1,0,0,0,100,100,2.4,0,1,7,0,5,20,20,20,1
+Style: KeywordGlow,Anton,${keywordSize},&H507E62FF,&H507E62FF,&H407E62FF,&H00000000,-1,0,0,0,100,100,2.4,0,1,10,0,5,20,20,20,1
+Style: Keyword,Anton,${keywordSize},&H00FFFFFF,&H00FFFFFF,&H00100818,&H804C35FF,-1,0,0,0,100,100,2.4,0,1,2,7,5,20,20,20,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -133,12 +142,25 @@ function keywordEvents(keyword, index, width, height) {
   ][index % 4];
   const x = Math.round(width / 2);
   const y = Math.round(height * 0.43);
-  const animation = `\\an5\\pos(${x},${y})\\frz${palette.rotation}\\fscx35\\fscy35\\t(0,105,\\fscx128\\fscy128\\frz0)\\t(105,235,\\fscx100\\fscy100)\\fad(20,110)`;
+  const font = index % 4 === 3 ? "Permanent Marker" : "Anton";
+  const animation = `\\an5\\pos(${x},${y})\\fn${font}\\frz${palette.rotation}\\fscx20\\fscy20\\t(0,90,\\fscx142\\fscy142\\frz0)\\t(90,230,\\fscx100\\fscy100)\\fad(15,130)`;
   const text = escapeAss(keyword.text);
   return [
-    dialogue("KeywordGlow", keyword.start, keyword.end, `{${animation}\\c${palette.accent}\\3c${palette.accent}\\blur5}${text}`, 1),
-    dialogue("Keyword", keyword.start, keyword.end, `{${animation}\\c${palette.front}\\4c${palette.accent}}${text}`, 2)
+    dialogue("KeywordBack", keyword.start, keyword.end, `{${animation}\\pos(${x + 8},${y + 10})\\c${palette.accent}\\3c&H00120A22&\\blur1.2}${text}`, 1),
+    dialogue("KeywordGlow", keyword.start, keyword.end, `{${animation}\\c${palette.accent}\\3c${palette.accent}\\blur6}${text}`, 2),
+    dialogue("Keyword", keyword.start, keyword.end, `{${animation}\\c${palette.front}\\4c${palette.accent}\\be1}${text}`, 3)
   ];
+}
+
+function fillCaptionGaps(captions, duration) {
+  if (!captions.length) return captions;
+  return captions.map((caption, index) => ({
+    ...caption,
+    start: index === 0 ? 0 : caption.start,
+    end: index < captions.length - 1
+      ? Math.max(caption.start + 0.08, captions[index + 1].start)
+      : Math.max(caption.end, duration)
+  }));
 }
 
 function dialogue(style, start, end, text, layer = 0) {
