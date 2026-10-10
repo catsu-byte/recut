@@ -161,10 +161,10 @@ test("ASS output uses a boxed bottom caption and animated keyword style", () => 
     keywords: [{ text: "GOTT", start: 1.4, end: 2 }]
   }, { width: 640, height: 360 });
   assert.match(ass, /Style: Caption,Arial,19,[^\n]+,3,4,0,2/);
-  assert.match(ass, /Style: KeywordGlow,Arial Black/);
-  assert.match(ass, /\\fscx58.*\\t\(0,120,\\fscx116/);
-  assert.match(ass, /\\blur18/);
-  assert.match(ass, /Dialogue: 5,0:00:01\.40,0:00:02\.00,Keyword/);
+  assert.match(ass, /Style: Keyword,Bebas Neue/);
+  assert.match(ass, /\\fscx82.*\\t\(0,165,\\fscx106/);
+  assert.match(ass, /KeywordAura[^\n]+\\blur14/);
+  assert.match(ass, /Dialogue: 6,0:00:01\.40,0:00:02\.00,Keyword/);
 });
 
 test("lyric captions use song timestamps and promote words near impacts", () => {

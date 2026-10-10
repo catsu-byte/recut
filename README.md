@@ -16,7 +16,7 @@ ReCut is a local-first desktop tool that turns pre-selected gaming highlights in
 - Local song transcription with word timestamps
 - Optional LRC/SRT import for exact user-provided lyrics and timing
 - Continuous white lyric captions on a black background
-- Layered, colored kinetic keywords with bundled Anton and Permanent Marker typography
+- Soft, semi-transparent 3D keywords with bundled Bebas Neue typography and directional light trails
 - Pre-impact grayscale pullback followed by RGB split, flash and micro-shake
 - Reference-cut subdivision, push, drift and glitch effects
 - Lanczos HD delivery, controlled sharpening and reduced saturation

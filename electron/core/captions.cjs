@@ -124,10 +124,10 @@ WrapStyle: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,Arial,${baseSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&HD0000000,-1,0,0,0,100,100,0,0,3,4,0,2,28,28,${bottomMargin},1
-Style: KeywordGlowWide,Arial Black,${keywordSize},&H40705BFF,&H40705BFF,&H40705BFF,&H00000000,-1,0,0,0,100,100,1.2,0,1,14,0,5,20,20,20,1
-Style: KeywordGlow,Arial Black,${keywordSize},&H18705BFF,&H18705BFF,&H18705BFF,&H00000000,-1,0,0,0,100,100,1.2,0,1,7,0,5,20,20,20,1
-Style: KeywordDepth,Arial Black,${keywordSize},&H00322472,&H00322472,&H00140B35,&H00000000,-1,0,0,0,100,100,1.2,0,1,3,0,5,20,20,20,1
-Style: Keyword,Arial Black,${keywordSize},&H006F78FF,&H006F78FF,&H00201548,&H00000000,-1,0,0,0,100,100,1.2,0,1,2,1,5,20,20,20,1
+Style: KeywordAura,Bebas Neue,${keywordSize},&H58705BFF,&H58705BFF,&H58705BFF,&H00000000,-1,0,0,0,100,100,1.8,0,1,8,0,5,20,20,20,1
+Style: KeywordTrail,Bebas Neue,${keywordSize},&H58624FFF,&H58624FFF,&H58624FFF,&H00000000,-1,0,0,0,100,100,1.8,0,1,0,0,5,20,20,20,1
+Style: KeywordDepth,Bebas Neue,${keywordSize},&H2446258A,&H2446258A,&H2446258A,&H00000000,-1,0,0,0,100,100,1.8,0,1,0,0,5,20,20,20,1
+Style: Keyword,Bebas Neue,${keywordSize},&H126876FF,&H126876FF,&H126876FF,&H00000000,-1,0,0,0,100,100,1.8,0,1,0,0,5,20,20,20,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -137,23 +137,25 @@ ${events.join("\n")}
 
 function keywordEvents(keyword, index, width, height) {
   const palette = [
-    { front: "&H006F78FF&", accent: "&H005247FF&", depth: "&H00221769&", rotation: -3, x: 0.50, y: 0.63 },
-    { front: "&H005B83FF&", accent: "&H00405FFF&", depth: "&H00172869&", rotation: 3, x: 0.69, y: 0.43 },
-    { front: "&H007D8FFF&", accent: "&H00545FFF&", depth: "&H00221D72&", rotation: -2, x: 0.34, y: 0.55 },
-    { front: "&H006D70FF&", accent: "&H00464BFF&", depth: "&H00201868&", rotation: 2, x: 0.56, y: 0.35 }
+    { front: "&H126876FF&", glow: "&H385849FF&", depth: "&H2446258A&", rotation: -2, x: 0.50, y: 0.62 },
+    { front: "&H12617FFF&", glow: "&H38505FFF&", depth: "&H2432218C&", rotation: 2, x: 0.68, y: 0.43 },
+    { front: "&H127084FF&", glow: "&H385B65FF&", depth: "&H243D278C&", rotation: -1, x: 0.34, y: 0.55 },
+    { front: "&H126978FF&", glow: "&H38544DFF&", depth: "&H243A2588&", rotation: 1, x: 0.56, y: 0.36 }
   ][index % 4];
   const x = Math.round(width * palette.x);
   const y = Math.round(height * palette.y);
-  const startX = x + (index % 2 ? 52 : -52);
-  const transform = `\\an5\\fnArial Black\\frz${palette.rotation}\\fscx58\\fscy58\\t(0,120,\\fscx116\\fscy116\\frz0)\\t(120,260,\\fscx100\\fscy100)\\fad(25,170)`;
-  const movement = (offsetX = 0, offsetY = 0) => `\\move(${startX + offsetX},${y + 18 + offsetY},${x + offsetX},${y + offsetY},0,150)`;
+  const direction = index % 2 ? 1 : -1;
+  const startX = x + direction * 82;
+  const transform = `\\an5\\fnBebas Neue\\frz${palette.rotation}\\fscx82\\fscy82\\blur2.4\\t(0,165,\\fscx106\\fscy106\\blur0.25\\frz0)\\t(165,310,\\fscx100\\fscy100)\\fad(55,230)`;
+  const movement = (offsetX = 0, offsetY = 0) => `\\move(${startX + offsetX},${y + 10 + offsetY},${x + offsetX},${y + offsetY},0,175)`;
   const text = escapeAss(keyword.text);
   return [
-    dialogue("KeywordGlowWide", keyword.start, keyword.end, `{${transform}${movement()}\\c${palette.accent}\\3c${palette.accent}\\blur18}${text}`, 1),
-    dialogue("KeywordGlow", keyword.start, keyword.end, `{${transform}${movement()}\\c${palette.accent}\\3c${palette.accent}\\blur8}${text}`, 2),
-    dialogue("KeywordDepth", keyword.start, keyword.end, `{${transform}${movement(15, 16)}\\c${palette.depth}\\3c${palette.depth}}${text}`, 3),
-    dialogue("KeywordDepth", keyword.start, keyword.end, `{${transform}${movement(9, 10)}\\c${palette.depth}\\3c${palette.depth}}${text}`, 4),
-    dialogue("Keyword", keyword.start, keyword.end, `{${transform}${movement()}\\c${palette.front}\\3c&H00201548&}${text}`, 5)
+    dialogue("KeywordAura", keyword.start, keyword.end, `{${transform}${movement()}\\c${palette.glow}\\3c${palette.glow}\\blur14}${text}`, 1),
+    dialogue("KeywordTrail", keyword.start, keyword.end, `{${transform}${movement(direction * 38, 4)}\\c&H70624FFF&\\blur5}${text}`, 2),
+    dialogue("KeywordTrail", keyword.start, keyword.end, `{${transform}${movement(direction * 25, 3)}\\c&H58624FFF&\\blur3.5}${text}`, 3),
+    dialogue("KeywordTrail", keyword.start, keyword.end, `{${transform}${movement(direction * 13, 2)}\\c&H40624FFF&\\blur2}${text}`, 4),
+    dialogue("KeywordDepth", keyword.start, keyword.end, `{${transform}${movement(8, 9)}\\c${palette.depth}\\blur0.5}${text}`, 5),
+    dialogue("Keyword", keyword.start, keyword.end, `{${transform}${movement()}\\c${palette.front}\\bord0\\shad0}${text}`, 6)
   ];
 }
 
