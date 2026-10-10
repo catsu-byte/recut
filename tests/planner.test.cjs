@@ -4,6 +4,7 @@ const { createBlueprint, assignClips, chooseEffect, createEventPlan, macroBounda
 const { createFcpxml, escapeXml } = require("../electron/core/exporters.cjs");
 const { selectDuration, parsePacketDuration, correlateEnvelopes } = require("../electron/core/media.cjs");
 const { montageDuration, outputProfile } = require("../electron/core/pipeline.cjs");
+const { createCaptionPlan, createAss } = require("../electron/core/captions.cjs");
 
 test("blueprint keeps the requested montage duration", () => {
   const blueprint = createBlueprint({
@@ -130,4 +131,32 @@ test("output profile does not upscale low-resolution source clips", () => {
   assert.deepEqual(outputProfile([{ width: 640, height: 360, fps: 29 }, { width: 640, height: 360, fps: 29 }], "16:9"), {
     width: 640, height: 360, fps: 29
   });
+});
+
+test("captions map source words into the edited timeline", () => {
+  const plan = [{
+    index: 0, timelineStart: 4, duration: 4, sourcePath: "clip.mp4",
+    sourceStart: 2, sourceDuration: 4, speed: 1, impactTime: 5
+  }];
+  const transcripts = [{
+    path: "clip.mp4",
+    segments: [{ words: [
+      { text: "Oh", start: 4.6, end: 4.8, probability: 0.9 },
+      { text: "Crystal!", start: 4.8, end: 5.1, probability: 0.95 }
+    ] }]
+  }];
+  const result = createCaptionPlan(plan, transcripts);
+  assert.equal(result.captions[0].text, "Oh Crystal!");
+  assert.equal(result.keywords[0].text, "CRYSTAL");
+  assert.ok(Math.abs(result.keywords[0].start - 6.92) < 0.001);
+});
+
+test("ASS output uses a boxed bottom caption and animated keyword style", () => {
+  const ass = createAss({
+    captions: [{ text: "mein Gott", start: 1, end: 2 }],
+    keywords: [{ text: "GOTT", start: 1.4, end: 2 }]
+  }, { width: 640, height: 360 });
+  assert.match(ass, /Style: Caption,Arial,19,[^\n]+,3,5,0,2/);
+  assert.match(ass, /\\fscx65.*\\t\(0,130,\\fscx118/);
+  assert.match(ass, /Dialogue: 1,0:00:01\.40,0:00:02\.00,Keyword/);
 });

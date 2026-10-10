@@ -2,7 +2,7 @@
 
 **Drop clips. Add a reference. Get the cut.**
 
-ReCut is a local-first desktop tool that turns pre-selected gaming highlights into a short montage inspired by the pacing of a reference edit. It detects scene cuts and audio peaks in the reference, scans source clips for high-motion moments, creates a 15–45 second edit, renders a preview, and exports an editable timeline for DaVinci Resolve Free.
+ReCut is a local-first desktop tool that turns pre-selected gaming highlights into a short montage inspired by the pacing of a reference edit. It detects scene cuts and audio peaks in the reference, scans source clips for impact moments, creates a 15–45 second edit, generates subtitles, renders a preview, and exports an editable timeline for DaVinci Resolve Free.
 
 > ReCut is an early MVP. It matches structure and energy rather than copying a creator's exact proprietary effects or creative decisions.
 
@@ -10,11 +10,13 @@ ReCut is a local-first desktop tool that turns pre-selected gaming highlights in
 
 - Reference scene-cut detection
 - Audio-onset and peak detection
-- Game-agnostic motion scoring for source clips
-- Automatic highlight-to-timeline assignment
-- Five local FFmpeg effects: clean, drift, push, punch, shake, and flash
+- Game-agnostic motion and audio-impact scoring for source clips
+- One intentional macro shot per selected highlight, ending just after the detected impact
+- Local speech transcription with word timestamps
+- White bottom captions on a black background
+- Large animated keywords timed to gameplay impacts
 - 16:9 and 9:16 output
-- H.264 preview render with music
+- H.264 preview render with matched music and original clip audio
 - FCPXML timeline and JSON analysis report
 - Offline processing; clips never leave the computer
 
@@ -23,11 +25,13 @@ ReCut is a local-first desktop tool that turns pre-selected gaming highlights in
 - Windows 10 or 11
 - DaVinci Resolve Free
 - Node.js 20 or newer when running from source
+- Python 3.10+ with `faster-whisper` for automatic captions in the current MVP
 
 ## Run from source
 
 ```powershell
 npm install
+python -m pip install faster-whisper
 npm run dev
 ```
 
@@ -40,7 +44,7 @@ Choose one reference edit and one or more gaming clips. An optional music file c
 3. Select `recut-timeline.fcpxml` from the generated output folder.
 4. Relink the generated `segments` folder if Resolve asks for media locations.
 
-The generated `recut-preview.mp4` is a quick preview. The imported timeline contains the individually rendered segments so the order, timing, audio and additional effects remain editable.
+The generated `recut-preview.mp4` includes burned-in styled captions. `recut-captions.ass` is the editable subtitle sidecar. The imported timeline contains the individually rendered segments so the order and timing remain editable.
 
 ## Development
 
@@ -54,6 +58,7 @@ npm run dist
 
 ## Roadmap
 
+- Bundle the speech engine and model downloader into the portable build
 - Detect effect signatures from reference frames
 - Add RGB split, blur and configurable Fusion macros
 - Optional game profiles for Valorant and Minecraft

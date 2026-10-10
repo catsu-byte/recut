@@ -21,7 +21,7 @@ app.innerHTML = `
         <span class="brand-mark"><i></i><i></i><i></i></span>
         <span>ReCut</span>
       </a>
-      <div class="top-meta"><span class="status-dot"></span> Local processing <span class="version">v0.1</span></div>
+      <div class="top-meta"><span class="status-dot"></span> Local processing <span class="version">v0.2</span></div>
     </header>
 
     <main>
@@ -115,7 +115,7 @@ app.innerHTML = `
         <div>
           <p class="eyebrow">EXPORT COMPLETE</p>
           <h2>Your montage is ready.</h2>
-          <p>Preview video, editable Resolve timeline and analysis report were created.</p>
+          <p id="resultSummary">Preview video, subtitles, editable Resolve timeline and analysis report were created.</p>
         </div>
         <button id="revealButton">Show files <span>↗</span></button>
       </section>
@@ -210,6 +210,10 @@ byId("renderButton").addEventListener("click", async () => {
   try {
     state.result = await window.recut.render(payload());
     showAnalysis(state.result);
+    const captions = state.result.captions;
+    byId("resultSummary").textContent = captions?.status === "ready"
+      ? `Created ${captions.phrases} subtitle phrase${captions.phrases === 1 ? "" : "s"} and ${captions.keywords} on-beat impact word${captions.keywords === 1 ? "" : "s"}.`
+      : "Montage created. Automatic speech captions were unavailable on this computer.";
     byId("resultCard").classList.remove("hidden");
     byId("resultCard").scrollIntoView({ behavior: "smooth", block: "center" });
   } catch (error) {

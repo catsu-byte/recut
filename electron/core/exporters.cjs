@@ -22,7 +22,7 @@ function createFcpxml({ segments, musicPath, musicOffset = 0, width, height, fps
   const resources = segments.map((segment, index) => {
     const id = `r${index + 2}`;
     const duration = frames(segment.duration, fps);
-    return `    <asset id="${id}" name="${escapeXml(path.basename(segment.renderedPath))}" start="0s" duration="${duration}/${fps}s" hasVideo="1" format="r1" src="${escapeXml(pathToFileURL(segment.renderedPath).href)}"/>`;
+    return `    <asset id="${id}" name="${escapeXml(path.basename(segment.renderedPath))}" start="0s" duration="${duration}/${fps}s" hasVideo="1" hasAudio="1" audioSources="1" audioChannels="2" format="r1" src="${escapeXml(pathToFileURL(segment.renderedPath).href)}"/>`;
   });
   let musicId = null;
   if (musicPath) {
@@ -62,7 +62,7 @@ ${clips.join("\n")}
 `;
 }
 
-function createReport({ blueprint, plan, referencePath, musicPath, musicOffset = 0, musicMatchConfidence = 0, outputProfile = null, outputPath }) {
+function createReport({ blueprint, plan, referencePath, musicPath, musicOffset = 0, musicMatchConfidence = 0, outputProfile = null, captions = null, outputPath }) {
   return {
     generatedAt: new Date().toISOString(),
     referencePath,
@@ -70,6 +70,7 @@ function createReport({ blueprint, plan, referencePath, musicPath, musicOffset =
     musicOffset: round(musicOffset),
     musicMatchConfidence: round(musicMatchConfidence),
     outputProfile,
+    captions,
     outputPath,
     duration: blueprint.duration,
     detectedSceneCuts: blueprint.detectedSceneCuts,

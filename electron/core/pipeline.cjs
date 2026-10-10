@@ -3,6 +3,8 @@ const path = require("node:path");
 const { run, probe, sceneCuts, audioOnsets, findAudioOffset, motionWindows, FFMPEG, FFPROBE } = require("./media.cjs");
 const { clamp, createEventPlan } = require("./planner.cjs");
 const { createFcpxml, createReport } = require("./exporters.cjs");
+const { transcribeClips } = require("./transcriber.cjs");
+const { createCaptionPlan, createAss } = require("./captions.cjs");
 
 async function assertToolchain() {
   await Promise.all([run(FFMPEG, ["-version"]), run(FFPROBE, ["-version"])]);
@@ -78,6 +80,12 @@ async function renderProject(input, progress = () => {}) {
   const segmentDirectory = path.join(projectDirectory, "segments");
   await fs.mkdir(segmentDirectory, { recursive: true });
 
+  progress({ stage: "captions", percent: 39, message: "Transcribing speech locally for captions" });
+  const transcription = await transcribeClips(input.clipPaths);
+  const captionPlan = createCaptionPlan(plan, transcription.clips);
+  const captionsPath = path.join(projectDirectory, "recut-captions.ass");
+  await fs.writeFile(captionsPath, createAss(captionPlan, { width, height }), "utf8");
+
   progress({ stage: "render", percent: 40, message: `Rendering ${plan.length} matched segments` });
   const renderedPlan = [];
   for (let index = 0; index < plan.length; index += 1) {
@@ -94,8 +102,13 @@ async function renderProject(input, progress = () => {}) {
 
   progress({ stage: "assemble", percent: 84, message: "Assembling preview and music" });
   const previewPath = path.join(projectDirectory, "recut-preview.mp4");
+  const basePreviewPath = path.join(projectDirectory, "recut-base.mp4");
   const audioPath = input.musicPath || input.referencePath;
-  await concatenate(renderedPlan, previewPath, audioPath, audioMatch.offset, targetDuration, projectDirectory);
+  await concatenate(renderedPlan, basePreviewPath, audioPath, audioMatch.offset, targetDuration, projectDirectory);
+
+  progress({ stage: "captions", percent: 90, message: captionPlan.captions.length ? "Styling subtitles and impact words" : "No reliable speech found — keeping the edit text-free" });
+  if (captionPlan.captions.length) await burnCaptions(basePreviewPath, previewPath, captionsPath);
+  else await fs.copyFile(basePreviewPath, previewPath);
 
   progress({ stage: "export", percent: 94, message: "Writing the DaVinci Resolve timeline" });
   const timelinePath = path.join(projectDirectory, "recut-timeline.fcpxml");
@@ -110,6 +123,14 @@ async function renderProject(input, progress = () => {}) {
       musicOffset: audioMatch.offset,
       musicMatchConfidence: audioMatch.confidence,
       outputProfile: { width, height, fps },
+      captions: {
+        status: transcription.status,
+        model: transcription.model,
+        error: transcription.error || null,
+        phrases: captionPlan.captions.length,
+        keywords: captionPlan.keywords.length,
+        path: captionsPath
+      },
       outputPath: previewPath
     }), null, 2), "utf8")
   ]);
@@ -120,6 +141,8 @@ async function renderProject(input, progress = () => {}) {
     previewPath,
     timelinePath,
     reportPath,
+    captionsPath,
+    captions: { status: transcription.status, phrases: captionPlan.captions.length, keywords: captionPlan.keywords.length },
     musicOffset: audioMatch.offset,
     musicMatchConfidence: audioMatch.confidence,
     outputProfile: { width, height, fps }
@@ -157,7 +180,10 @@ async function renderSegment(segment, outputPath, { width, height, fps }) {
     "-ss", segment.sourceStart.toFixed(3), "-t", segment.sourceDuration.toFixed(3),
     "-i", segment.sourcePath,
     "-vf", `${filters},${speed},fps=${fps},format=yuv420p`,
-    "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "16",
+    "-af", `atempo=${segment.speed.toFixed(5)}`,
+    "-map", "0:v:0", "-map", "0:a:0?",
+    "-c:v", "libx264", "-preset", "medium", "-crf", "16",
+    "-c:a", "aac", "-b:a", "160k", "-ac", "2",
     "-t", segment.duration.toFixed(3), outputPath
   ]);
 }
@@ -189,10 +215,22 @@ async function concatenate(plan, outputPath, audioPath, audioOffset, duration, w
     "-hide_banner", "-loglevel", "error", "-y",
     "-f", "concat", "-safe", "0", "-i", concatPath,
     "-ss", Math.max(0, audioOffset).toFixed(3), "-i", audioPath,
-    "-map", "0:v:0", "-map", "1:a:0?",
+    "-filter_complex", `[0:a:0]volume=0.72[source];[1:a:0]volume=0.82[music];[source][music]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95,afade=t=out:st=${Math.max(0, duration - 0.35).toFixed(3)}:d=0.35[mix]`,
+    "-map", "0:v:0", "-map", "[mix]",
     "-c:v", "copy", "-c:a", "aac", "-b:a", "256k",
-    "-af", `afade=t=out:st=${Math.max(0, duration - 0.35).toFixed(3)}:d=0.35`,
     "-t", duration.toFixed(3), "-movflags", "+faststart", outputPath
+  ]);
+}
+
+async function burnCaptions(inputPath, outputPath, captionsPath) {
+  const filterPath = captionsPath.replaceAll("\\", "/").replace(":", "\\:").replaceAll("'", "\\'");
+  await run(FFMPEG, [
+    "-hide_banner", "-loglevel", "error", "-y",
+    "-i", inputPath,
+    "-vf", `ass='${filterPath}'`,
+    "-map", "0:v:0", "-map", "0:a:0?",
+    "-c:v", "libx264", "-preset", "medium", "-crf", "16",
+    "-c:a", "copy", "-movflags", "+faststart", outputPath
   ]);
 }
 
