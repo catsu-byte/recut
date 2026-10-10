@@ -188,7 +188,10 @@ function macroBoundaries(duration, cuts, clipCount) {
 function detectImpact(duration, onsets, motionCandidates) {
   const motionMaximum = Math.max(...motionCandidates.map((item) => item.score), 0.00001);
   const candidates = onsets
-    .filter((item) => item.time >= duration * 0.18 && item.time <= duration - 0.12)
+    // The final inventory/pickup sound is often the loudest event in a gaming
+    // clip, but it happens after the elimination. Keep a short post-roll out of
+    // the search so effects land on the fight instead of the loot collection.
+    .filter((item) => item.time >= duration * 0.18 && item.time <= Math.min(duration - 0.12, duration * 0.92))
     .map((onset) => {
       const nearestMotion = motionCandidates.reduce((best, motion) => {
         const distance = Math.abs(motion.time - onset.time);

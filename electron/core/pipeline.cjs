@@ -5,6 +5,7 @@ const { clamp, createEventPlan } = require("./planner.cjs");
 const { createFcpxml, createReport } = require("./exporters.cjs");
 const { transcribeMusicSection, matchMusicSection } = require("./transcriber.cjs");
 const { createLyricCaptionPlan, createAss } = require("./captions.cjs");
+const { loadTimedLyrics } = require("./lyrics.cjs");
 
 async function assertToolchain() {
   await Promise.all([run(FFMPEG, ["-version"]), run(FFPROBE, ["-version"])]);
@@ -82,7 +83,13 @@ async function renderProject(input, progress = () => {}) {
 
   const audioPath = input.musicPath || input.referencePath;
   progress({ stage: "captions", percent: 39, message: "Transcribing the matched song section for lyric captions" });
-  const transcription = await transcribeMusicSection(audioPath, audioMatch.offset, targetDuration, projectDirectory);
+  const transcription = input.lyricsPath
+    ? {
+        status: "provided",
+        model: "timed lyrics",
+        transcript: await loadTimedLyrics(input.lyricsPath, targetDuration, audioMatch.offset)
+      }
+    : await transcribeMusicSection(audioPath, audioMatch.offset, targetDuration, projectDirectory);
   const captionPlan = createLyricCaptionPlan(plan, transcription.transcript);
   const captionsPath = path.join(projectDirectory, "recut-captions.ass");
   await fs.writeFile(captionsPath, createAss(captionPlan, { width, height }), "utf8");
@@ -127,7 +134,7 @@ async function renderProject(input, progress = () => {}) {
       captions: {
         status: transcription.status,
         model: transcription.model,
-        source: "matched music section",
+        source: input.lyricsPath ? "provided timed lyrics" : "matched music section",
         error: transcription.error || null,
         phrases: captionPlan.captions.length,
         keywords: captionPlan.keywords.length,
@@ -203,13 +210,17 @@ function effectFilters(effectOrSegment, base, width, height, duration) {
     : effectOrSegment;
   const effect = segment.effect;
   const speed = `setpts=PTS/${Math.max(segment.speed || 1, 0.01)}`;
-  const impact = clamp((segment.impactTime - segment.sourceStart) / Math.max(segment.speed || 1, 0.01), 0.04, Math.max(0.05, duration - 0.04));
+  const detectedImpact = (segment.impactTime - segment.sourceStart) / Math.max(segment.speed || 1, 0.01);
+  const impact = clamp(detectedImpact - 0.42, 0.08, Math.max(0.09, duration - 0.08));
   const hitStart = Math.max(0, impact - 0.055).toFixed(3);
   const hitEnd = Math.min(duration, impact + 0.16).toFixed(3);
-  const preStart = Math.max(0, impact - 0.48).toFixed(3);
-  const preEnd = Math.max(0.02, impact).toFixed(3);
+  const preStart = Math.max(0, impact - 0.62).toFixed(3);
+  const dipTime = Math.max(0.02, impact - 0.13).toFixed(3);
+  const recoverTime = Math.max(0.04, impact).toFixed(3);
   const grade = "hqdn3d=0.7:0.7:2.8:2.8,unsharp=5:5:1.15:3:3:0.3,eq=saturation=0.74:contrast=1.055:gamma=0.98,vignette=PI/5.7";
-  const preKillFade = `eq=brightness='if(between(t,${preStart},${preEnd}),-0.17*(t-${preStart})/max(${(impact - Number(preStart)).toFixed(3)}\\,0.02),0)':saturation='if(between(t,${preStart},${preEnd}),1-0.88*(t-${preStart})/max(${(impact - Number(preStart)).toFixed(3)}\\,0.02),1)':eval=frame`;
+  const fadeDown = Math.max(0.02, Number(dipTime) - Number(preStart)).toFixed(3);
+  const fadeUp = Math.max(0.02, Number(recoverTime) - Number(dipTime)).toFixed(3);
+  const preKillFade = `eq=brightness='if(between(t,${preStart},${dipTime}),-0.21*(t-${preStart})/${fadeDown},if(between(t,${dipTime},${recoverTime}),-0.21*(${recoverTime}-t)/${fadeUp},0))':saturation='if(between(t,${preStart},${dipTime}),1-0.92*(t-${preStart})/${fadeDown},if(between(t,${dipTime},${recoverTime}),1-0.92*(${recoverTime}-t)/${fadeUp},1))':eval=frame`;
   const impactStack = `${preKillFade},scale=${width + 32}:${height + 18},crop=${width}:${height}:x='(in_w-out_w)/2+if(between(t,${hitStart},${hitEnd}),7*sin(92*t),0)':y='(in_h-out_h)/2+if(between(t,${hitStart},${hitEnd}),5*cos(79*t),0)',rgbashift=rh=5:bh=-5:edge=wrap:enable='between(t,${hitStart},${hitEnd})',gblur=sigma=1.15:enable='between(t,${hitStart},${impact.toFixed(3)})',eq=brightness=0.3:enable='between(t,${impact.toFixed(3)},${Math.min(duration, impact + 0.075).toFixed(3)})'`;
   if (effect === "impact") return `${base},${speed},${grade},${impactStack}`;
   if (effect === "glitch") {

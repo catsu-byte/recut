@@ -1,6 +1,6 @@
 {
   "name": "recut",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "author": "catsu-byte",
   "description": "Reference-guided 30-second gaming montage editor for DaVinci Resolve Free.",

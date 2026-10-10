@@ -62,6 +62,8 @@ h1 span { color: #777f79; }
 .step-copy p { color: var(--muted); font-size: 13px; margin: 8px 0 18px; }
 .file-button { width: min(100%, 440px); height: 48px; border: 1px dashed #3b4640; background: #0a0e10; display: flex; align-items: center; justify-content: space-between; padding: 0 15px; cursor: pointer; transition: .2s ease; }
 .file-button:hover { border-color: var(--acid); background: rgba(200, 255, 36, .035); }
+.secondary-file { margin-top: 14px; height: 42px; opacity: .82; }
+.secondary-file em { color: #68706c; font: 9px DM Mono, monospace; text-transform: uppercase; margin-left: 5px; }
 .file-button span { font-weight: 600; font-size: 13px; }
 kbd { color: #727c76; background: transparent; font: 10px DM Mono, monospace; }
 .file-value { width: min(100%, 440px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #68716c; font: 10px DM Mono, monospace; margin-top: 9px; }

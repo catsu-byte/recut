@@ -8,6 +8,9 @@ const VIDEO_FILTERS = [
 const AUDIO_FILTERS = [
   { name: "Audio or video", extensions: ["mp3", "wav", "m4a", "aac", "flac", "ogg", "mp4", "mov", "mkv"] }
 ];
+const LYRICS_FILTERS = [
+  { name: "Timed lyrics", extensions: ["lrc", "srt"] }
+];
 
 let mainWindow;
 
@@ -50,6 +53,9 @@ app.whenReady().then(async () => {
   );
   ipcMain.handle("pick-music", () =>
     pickFiles({ title: "Choose music", filters: AUDIO_FILTERS, properties: ["openFile"] })
+  );
+  ipcMain.handle("pick-lyrics", () =>
+    pickFiles({ title: "Choose timed lyrics", filters: LYRICS_FILTERS, properties: ["openFile"] })
   );
   ipcMain.handle("pick-clips", () =>
     pickFiles({ title: "Choose gaming clips", filters: VIDEO_FILTERS, properties: ["openFile", "multiSelections"] })

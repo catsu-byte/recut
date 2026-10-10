@@ -4,6 +4,7 @@ const STOP_WORDS = new Set([
   "aber", "also", "and", "auch", "auf", "das", "der", "die", "ein", "eine", "for", "für",
   "hier", "ich", "ist", "mit", "nicht", "oder", "the", "und", "von", "was", "wir", "you"
 ]);
+const IMPACT_LEAD_SECONDS = 0.42;
 
 function mapWordsToTimeline(plan, transcripts) {
   const byPath = new Map(transcripts.map((item) => [normalizePath(item.path), item]));
@@ -32,7 +33,7 @@ function createCaptionPlan(plan, transcripts) {
     duration
   );
   const keywords = plan.flatMap((segment) => {
-    const impact = segment.timelineStart + (segment.impactTime - segment.sourceStart) / segment.speed;
+    const impact = displayImpactTime(segment);
     const candidates = words
       .filter((word) => word.segmentIndex === segment.index && Math.abs(midpoint(word) - impact) <= 1.35)
       .filter((word) => keywordText(word.text).length >= 3 && !STOP_WORDS.has(keywordText(word.text).toLowerCase()))
@@ -65,7 +66,7 @@ function createLyricCaptionPlan(plan, transcript) {
   );
   const keywords = plan.flatMap((segment) => {
     const impact = clamp(
-      segment.timelineStart + (segment.impactTime - segment.sourceStart) / segment.speed,
+      displayImpactTime(segment),
       segment.timelineStart,
       segment.timelineStart + segment.duration
     );
@@ -107,10 +108,10 @@ function groupWords(words) {
 
 function createAss({ captions, keywords }, { width, height }) {
   const baseSize = Math.max(18, Math.round(height * 0.052));
-  const keywordSize = Math.max(36, Math.round(height * 0.13));
+  const keywordSize = Math.max(46, Math.round(height * 0.17));
   const bottomMargin = Math.round(height * 0.075);
   const events = [
-    ...captions.map((caption) => dialogue("Caption", caption.start, caption.end, escapeAss(caption.text))),
+    ...captions.flatMap(captionEvents),
     ...keywords.flatMap((keyword, index) => keywordEvents(keyword, index, width, height))
   ].sort((a, b) => a.start - b.start).map((item) => item.line);
   return `[Script Info]
@@ -122,10 +123,11 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,Arial,${baseSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&HDA000000,-1,0,0,0,100,100,0,0,3,4,0,2,28,28,${bottomMargin},1
-Style: KeywordBack,Anton,${keywordSize},&H8043289A,&H8043289A,&H80301B70,&H00000000,-1,0,0,0,100,100,2.4,0,1,7,0,5,20,20,20,1
-Style: KeywordGlow,Anton,${keywordSize},&H507E62FF,&H507E62FF,&H407E62FF,&H00000000,-1,0,0,0,100,100,2.4,0,1,10,0,5,20,20,20,1
-Style: Keyword,Anton,${keywordSize},&H00FFFFFF,&H00FFFFFF,&H00100818,&H804C35FF,-1,0,0,0,100,100,2.4,0,1,2,7,5,20,20,20,1
+Style: Caption,Arial,${baseSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&HD0000000,-1,0,0,0,100,100,0,0,3,4,0,2,28,28,${bottomMargin},1
+Style: KeywordGlowWide,Arial Black,${keywordSize},&H40705BFF,&H40705BFF,&H40705BFF,&H00000000,-1,0,0,0,100,100,1.2,0,1,14,0,5,20,20,20,1
+Style: KeywordGlow,Arial Black,${keywordSize},&H18705BFF,&H18705BFF,&H18705BFF,&H00000000,-1,0,0,0,100,100,1.2,0,1,7,0,5,20,20,20,1
+Style: KeywordDepth,Arial Black,${keywordSize},&H00322472,&H00322472,&H00140B35,&H00000000,-1,0,0,0,100,100,1.2,0,1,3,0,5,20,20,20,1
+Style: Keyword,Arial Black,${keywordSize},&H006F78FF,&H006F78FF,&H00201548,&H00000000,-1,0,0,0,100,100,1.2,0,1,2,1,5,20,20,20,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -135,21 +137,39 @@ ${events.join("\n")}
 
 function keywordEvents(keyword, index, width, height) {
   const palette = [
-    { front: "&H00FFFFFF&", accent: "&H006B55FF&", rotation: -5 },
-    { front: "&H003F5BFF&", accent: "&H003F5BFF&", rotation: 4 },
-    { front: "&H006DFF72&", accent: "&H006DFF72&", rotation: -3 },
-    { front: "&H00FFB45E&", accent: "&H00FFB45E&", rotation: 5 }
+    { front: "&H006F78FF&", accent: "&H005247FF&", depth: "&H00221769&", rotation: -3, x: 0.50, y: 0.63 },
+    { front: "&H005B83FF&", accent: "&H00405FFF&", depth: "&H00172869&", rotation: 3, x: 0.69, y: 0.43 },
+    { front: "&H007D8FFF&", accent: "&H00545FFF&", depth: "&H00221D72&", rotation: -2, x: 0.34, y: 0.55 },
+    { front: "&H006D70FF&", accent: "&H00464BFF&", depth: "&H00201868&", rotation: 2, x: 0.56, y: 0.35 }
   ][index % 4];
-  const x = Math.round(width / 2);
-  const y = Math.round(height * 0.43);
-  const font = index % 4 === 3 ? "Permanent Marker" : "Anton";
-  const animation = `\\an5\\pos(${x},${y})\\fn${font}\\frz${palette.rotation}\\fscx20\\fscy20\\t(0,90,\\fscx142\\fscy142\\frz0)\\t(90,230,\\fscx100\\fscy100)\\fad(15,130)`;
+  const x = Math.round(width * palette.x);
+  const y = Math.round(height * palette.y);
+  const startX = x + (index % 2 ? 52 : -52);
+  const transform = `\\an5\\fnArial Black\\frz${palette.rotation}\\fscx58\\fscy58\\t(0,120,\\fscx116\\fscy116\\frz0)\\t(120,260,\\fscx100\\fscy100)\\fad(25,170)`;
+  const movement = (offsetX = 0, offsetY = 0) => `\\move(${startX + offsetX},${y + 18 + offsetY},${x + offsetX},${y + offsetY},0,150)`;
   const text = escapeAss(keyword.text);
   return [
-    dialogue("KeywordBack", keyword.start, keyword.end, `{${animation}\\pos(${x + 8},${y + 10})\\c${palette.accent}\\3c&H00120A22&\\blur1.2}${text}`, 1),
-    dialogue("KeywordGlow", keyword.start, keyword.end, `{${animation}\\c${palette.accent}\\3c${palette.accent}\\blur6}${text}`, 2),
-    dialogue("Keyword", keyword.start, keyword.end, `{${animation}\\c${palette.front}\\4c${palette.accent}\\be1}${text}`, 3)
+    dialogue("KeywordGlowWide", keyword.start, keyword.end, `{${transform}${movement()}\\c${palette.accent}\\3c${palette.accent}\\blur18}${text}`, 1),
+    dialogue("KeywordGlow", keyword.start, keyword.end, `{${transform}${movement()}\\c${palette.accent}\\3c${palette.accent}\\blur8}${text}`, 2),
+    dialogue("KeywordDepth", keyword.start, keyword.end, `{${transform}${movement(15, 16)}\\c${palette.depth}\\3c${palette.depth}}${text}`, 3),
+    dialogue("KeywordDepth", keyword.start, keyword.end, `{${transform}${movement(9, 10)}\\c${palette.depth}\\3c${palette.depth}}${text}`, 4),
+    dialogue("Keyword", keyword.start, keyword.end, `{${transform}${movement()}\\c${palette.front}\\3c&H00201548&}${text}`, 5)
   ];
+}
+
+function captionEvents(caption) {
+  if (!caption.words?.length) return [dialogue("Caption", caption.start, caption.end, escapeAss(caption.text))];
+  return caption.words.map((word, index) => {
+    const start = index === 0 ? caption.start : Math.max(caption.start, word.start);
+    const next = caption.words[index + 1];
+    const end = next ? Math.max(start + 0.06, next.start) : caption.end;
+    const text = joinWords(caption.words.slice(0, index + 1).map((item) => item.text));
+    return dialogue("Caption", start, end, escapeAss(text));
+  });
+}
+
+function displayImpactTime(segment) {
+  return segment.timelineStart + (segment.impactTime - segment.sourceStart) / segment.speed - IMPACT_LEAD_SECONDS;
 }
 
 function fillCaptionGaps(captions, duration) {

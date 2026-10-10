@@ -3,6 +3,7 @@ import "./style.css";
 const state = {
   referencePath: "",
   musicPath: "",
+  lyricsPath: "",
   clipPaths: [],
   outputDirectory: "",
   duration: 30,
@@ -21,7 +22,7 @@ app.innerHTML = `
         <span class="brand-mark"><i></i><i></i><i></i></span>
         <span>ReCut</span>
       </a>
-      <div class="top-meta"><span class="status-dot"></span> Local processing <span class="version">v0.4</span></div>
+      <div class="top-meta"><span class="status-dot"></span> Local processing <span class="version">v0.5</span></div>
     </header>
 
     <main>
@@ -60,6 +61,8 @@ app.innerHTML = `
               <p>Without a track, the reference audio is used.</p>
               <button class="file-button" id="pickMusic"><span>Choose music</span><kbd>AUDIO</kbd></button>
               <div class="file-value" id="musicValue">Using reference audio</div>
+              <button class="file-button secondary-file" id="pickLyrics"><span>Exact timed lyrics <em>optional</em></span><kbd>LRC / SRT</kbd></button>
+              <div class="file-value" id="lyricsValue">Automatic song transcription</div>
             </div>
           </article>
         </div>
@@ -134,6 +137,7 @@ function updateUi() {
     ? `${state.clipPaths.length} clip${state.clipPaths.length === 1 ? "" : "s"} selected`
     : "No clips selected";
   byId("musicValue").textContent = state.musicPath ? basename(state.musicPath) : "Using reference audio";
+  byId("lyricsValue").textContent = state.lyricsPath ? basename(state.lyricsPath) : "Automatic song transcription";
   byId("outputValue").textContent = state.outputDirectory || "Choose a folder";
   byId("durationValue").textContent = `${state.duration} sec`;
 
@@ -163,6 +167,7 @@ byId("pickClips").addEventListener("click", () => choose(window.recut.pickClips,
   state.clipPaths = [...new Set([...state.clipPaths, ...values])];
 }));
 byId("pickMusic").addEventListener("click", () => choose(window.recut.pickMusic, ([value]) => { state.musicPath = value; }));
+byId("pickLyrics").addEventListener("click", () => choose(window.recut.pickLyrics, ([value]) => { state.lyricsPath = value; }));
 byId("pickOutput").addEventListener("click", () => choose(window.recut.pickOutput, ([value]) => { state.outputDirectory = value; }));
 
 byId("duration").addEventListener("input", (event) => {
@@ -184,6 +189,7 @@ function payload() {
   return {
     referencePath: state.referencePath,
     musicPath: state.musicPath,
+    lyricsPath: state.lyricsPath,
     clipPaths: state.clipPaths,
     outputDirectory: state.outputDirectory,
     duration: state.duration,
@@ -211,7 +217,7 @@ byId("renderButton").addEventListener("click", async () => {
     state.result = await window.recut.render(payload());
     showAnalysis(state.result);
     const captions = state.result.captions;
-    byId("resultSummary").textContent = captions?.status === "ready"
+    byId("resultSummary").textContent = ["ready", "provided"].includes(captions?.status)
       ? `Created ${captions.phrases} lyric phrase${captions.phrases === 1 ? "" : "s"} and ${captions.keywords} on-beat impact word${captions.keywords === 1 ? "" : "s"}.`
       : "Montage created. Automatic lyric transcription was unavailable on this computer.";
     byId("resultCard").classList.remove("hidden");

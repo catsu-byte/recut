@@ -5,6 +5,7 @@ const { createFcpxml, escapeXml } = require("../electron/core/exporters.cjs");
 const { selectDuration, parsePacketDuration, correlateEnvelopes } = require("../electron/core/media.cjs");
 const { montageDuration, outputProfile } = require("../electron/core/pipeline.cjs");
 const { createCaptionPlan, createLyricCaptionPlan, createAss } = require("../electron/core/captions.cjs");
+const { parseTimedLyrics, parseTimestamp } = require("../electron/core/lyrics.cjs");
 
 test("blueprint keeps the requested montage duration", () => {
   const blueprint = createBlueprint({
@@ -151,7 +152,7 @@ test("captions map source words into the edited timeline", () => {
   const result = createCaptionPlan(plan, transcripts);
   assert.equal(result.captions[0].text, "Oh Crystal!");
   assert.equal(result.keywords[0].text, "CRYSTAL");
-  assert.ok(Math.abs(result.keywords[0].start - 6.92) < 0.001);
+  assert.ok(Math.abs(result.keywords[0].start - 6.5) < 0.001);
 });
 
 test("ASS output uses a boxed bottom caption and animated keyword style", () => {
@@ -160,9 +161,10 @@ test("ASS output uses a boxed bottom caption and animated keyword style", () => 
     keywords: [{ text: "GOTT", start: 1.4, end: 2 }]
   }, { width: 640, height: 360 });
   assert.match(ass, /Style: Caption,Arial,19,[^\n]+,3,4,0,2/);
-  assert.match(ass, /Style: KeywordGlow,Anton/);
-  assert.match(ass, /\\fscx20.*\\t\(0,90,\\fscx142/);
-  assert.match(ass, /Dialogue: 3,0:00:01\.40,0:00:02\.00,Keyword/);
+  assert.match(ass, /Style: KeywordGlow,Arial Black/);
+  assert.match(ass, /\\fscx58.*\\t\(0,120,\\fscx116/);
+  assert.match(ass, /\\blur18/);
+  assert.match(ass, /Dialogue: 5,0:00:01\.40,0:00:02\.00,Keyword/);
 });
 
 test("lyric captions use song timestamps and promote words near impacts", () => {
@@ -178,7 +180,27 @@ test("lyric captions use song timestamps and promote words near impacts", () => 
   assert.equal(result.captions[0].text, "Everything fine");
   assert.equal(result.captions[0].start, 0);
   assert.equal(result.captions[0].end, 4);
-  assert.equal(result.keywords[0].text, "FINE");
+  assert.equal(result.keywords[0].text, "EVERYTHING");
+});
+
+test("caption rendering reveals a phrase word by word", () => {
+  const ass = createAss({
+    captions: [{
+      text: "one two", start: 0, end: 2,
+      words: [{ text: "one", start: 0.5, end: 0.8 }, { text: "two", start: 1.1, end: 1.4 }]
+    }],
+    keywords: []
+  }, { width: 1280, height: 720 });
+  assert.match(ass, /Dialogue: 0,0:00:00\.00,0:00:01\.10,Caption[^\n]+one/);
+  assert.match(ass, /Dialogue: 0,0:00:01\.10,0:00:02\.00,Caption[^\n]+one two/);
+});
+
+test("impact detection ignores loud pickup sounds in the final post-roll", () => {
+  const impact = detectImpact(10, [
+    { time: 6, strength: 0.7 },
+    { time: 9.7, strength: 1 }
+  ], [{ time: 6, score: 1 }, { time: 9.7, score: 0.2 }]);
+  assert.equal(impact.time, 6);
 });
 
 test("lyric captions cover silent gaps without overlapping", () => {
@@ -196,4 +218,15 @@ test("lyric captions cover silent gaps without overlapping", () => {
   assert.equal(captions[0].start, 0);
   assert.equal(captions[0].end, captions[1].start);
   assert.equal(captions[1].end, 6);
+});
+
+test("timed lyrics parser reads LRC and SRT cues", () => {
+  const lrc = parseTimedLyrics("[00:01.20]first line\n[00:03.50]second line", 6);
+  assert.deepEqual(lrc, [
+    { start: 1.2, end: 3.5, text: "first line" },
+    { start: 3.5, end: 6, text: "second line" }
+  ]);
+  const srt = parseTimedLyrics("1\n00:00:02,000 --> 00:00:04,250\nExact words", 6);
+  assert.deepEqual(srt, [{ start: 2, end: 4.25, text: "Exact words" }]);
+  assert.equal(parseTimestamp("01:02:03,500"), 3723.5);
 });

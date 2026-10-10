@@ -14,6 +14,7 @@ ReCut is a local-first desktop tool that turns pre-selected gaming highlights in
 - One intentional macro shot per selected highlight, ending just after the detected impact
 - Spectral music matching, resilient to bass boosts and game audio
 - Local song transcription with word timestamps
+- Optional LRC/SRT import for exact user-provided lyrics and timing
 - Continuous white lyric captions on a black background
 - Layered, colored kinetic keywords with bundled Anton and Permanent Marker typography
 - Pre-impact grayscale pullback followed by RGB split, flash and micro-shake
@@ -50,7 +51,7 @@ Choose one reference edit and one or more gaming clips. An optional music file c
 
 The generated `recut-preview.mp4` includes burned-in styled captions. Captions stay visible between detected lyric phrases so the lower subtitle strip remains continuous. `recut-captions.ass` is the editable subtitle sidecar. The imported timeline contains the individually rendered segments so the order and timing remain editable.
 
-Lyric text is transcribed from the selected local audio file; ReCut does not scrape copyrighted lyric sites. Review `recut-captions.ass` when exact published wording is required.
+Lyric text is transcribed from the selected local audio file by default. For exact wording, select a legally obtained `.lrc` or `.srt` file before rendering. ReCut does not scrape copyrighted lyric sites.
 
 ## Development
 
@@ -65,7 +66,6 @@ npm run dist
 ## Roadmap
 
 - Bundle the audio-matching and speech engines into the portable build
-- Optional LRC/SRT import for exact user-supplied lyrics
 - Detect effect signatures from reference frames
 - Add RGB split, blur and configurable Fusion macros
 - Optional game profiles for Valorant and Minecraft
