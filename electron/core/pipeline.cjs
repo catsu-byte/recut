@@ -17,7 +17,7 @@ function validateInput(input, { requireOutput = true } = {}) {
 async function inspectProject(input) {
   validateInput(input, { requireOutput: false });
   const reference = await probe(input.referencePath);
-  const targetDuration = clamp(Number(input.duration) || Math.min(reference.duration, 30), 15, Math.min(45, reference.duration));
+  const targetDuration = montageDuration(input.duration, reference.duration);
   const [cuts, onsets, clips] = await Promise.all([
     sceneCuts(input.referencePath, targetDuration),
     audioOnsets(input.musicPath || input.referencePath, targetDuration),
@@ -35,7 +35,7 @@ async function renderProject(input, progress = () => {}) {
   validateInput(input);
   progress({ stage: "reference", percent: 3, message: "Reading the reference edit" });
   const reference = await probe(input.referencePath);
-  const targetDuration = clamp(Number(input.duration) || Math.min(reference.duration, 30), 15, Math.min(45, reference.duration));
+  const targetDuration = montageDuration(input.duration, reference.duration);
   const width = input.aspectRatio === "9:16" ? 1080 : 1920;
   const height = input.aspectRatio === "9:16" ? 1920 : 1080;
   const fps = 30;
@@ -102,6 +102,15 @@ async function renderProject(input, progress = () => {}) {
   };
 }
 
+function montageDuration(requestedDuration, referenceDuration) {
+  if (!Number.isFinite(referenceDuration) || referenceDuration <= 0.05) {
+    throw new Error("The reference edit has no readable duration. Re-export or remux it to MP4 and try again.");
+  }
+  const maximum = Math.min(45, referenceDuration);
+  const minimum = Math.min(15, maximum);
+  return clamp(Number(requestedDuration) || Math.min(referenceDuration, 30), minimum, maximum);
+}
+
 async function renderSegment(segment, outputPath, { width, height, fps }) {
   const base = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
   const speed = `setpts=PTS/${segment.speed}`;
@@ -166,4 +175,4 @@ function summarize(blueprint, plan, reference) {
   };
 }
 
-module.exports = { assertToolchain, inspectProject, renderProject, effectFilters };
+module.exports = { assertToolchain, inspectProject, renderProject, effectFilters, montageDuration };

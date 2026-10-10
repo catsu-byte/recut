@@ -2,6 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createBlueprint, assignClips, chooseEffect } = require("../electron/core/planner.cjs");
 const { createFcpxml, escapeXml } = require("../electron/core/exporters.cjs");
+const { selectDuration, parsePacketDuration } = require("../electron/core/media.cjs");
+const { montageDuration } = require("../electron/core/pipeline.cjs");
 
 test("blueprint keeps the requested montage duration", () => {
   const blueprint = createBlueprint({
@@ -71,4 +73,28 @@ test("FCPXML escapes paths and describes every segment", () => {
 
 test("XML escaping handles unsafe characters", () => {
   assert.equal(escapeXml(`a&<>'"`), "a&amp;&lt;&gt;&apos;&quot;");
+});
+
+test("media duration ignores invalid negative container metadata", () => {
+  const duration = selectDuration({
+    format: { duration: "-1.000000" },
+    streams: [{ codec_type: "video", duration: "28.417" }, { codec_type: "audio", duration: "28.4" }]
+  });
+  assert.equal(duration, 28.417);
+});
+
+test("media duration fails clearly when every duration is invalid", () => {
+  assert.throws(
+    () => selectDuration({ format: { duration: "-1" }, streams: [{ duration: "N/A" }] }, "broken.mp4"),
+    /Could not read a valid duration/
+  );
+});
+
+test("montage duration supports references shorter than fifteen seconds", () => {
+  assert.equal(montageDuration(30, 9.5), 9.5);
+  assert.equal(montageDuration(20, 32), 20);
+});
+
+test("packet timestamps provide a fallback duration", () => {
+  assert.ok(Math.abs(parsePacketDuration("0.000000,0.033333\n12.500000,0.033333\n28.383000,0.034000\n") - 28.417) < 0.000001);
 });

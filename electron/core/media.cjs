@@ -32,19 +32,63 @@ async function probe(filePath) {
   if (!fs.existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
   const { stdout } = await run(FFPROBE, [
     "-v", "error",
-    "-show_entries", "format=duration:stream=index,codec_type,width,height,r_frame_rate,sample_rate",
+    "-show_entries", "format=duration:stream=index,codec_type,width,height,r_frame_rate,sample_rate,duration",
     "-of", "json",
     filePath
   ]);
   const data = JSON.parse(stdout.toString("utf8"));
   const video = data.streams?.find((stream) => stream.codec_type === "video");
+  let duration;
+  try {
+    duration = selectDuration(data, filePath);
+  } catch {
+    duration = await durationFromPackets(filePath);
+  }
   return {
     path: filePath,
-    duration: Number(data.format?.duration || 0),
+    duration,
     width: Number(video?.width || 0),
     height: Number(video?.height || 0),
     fps: parseRate(video?.r_frame_rate)
   };
+}
+
+async function durationFromPackets(filePath) {
+  const { stdout } = await run(FFPROBE, [
+    "-v", "error", "-select_streams", "v:0",
+    "-show_entries", "packet=pts_time,duration_time",
+    "-of", "csv=p=0", filePath
+  ]);
+  const duration = parsePacketDuration(stdout.toString("utf8"));
+  if (!Number.isFinite(duration) || duration <= 0.05) {
+    throw new Error(`Could not read a valid duration from ${filePath}. Try remuxing the file to MP4 in DaVinci Resolve or FFmpeg.`);
+  }
+  return duration;
+}
+
+function parsePacketDuration(csv) {
+  let maximum = 0;
+  for (const line of String(csv).split(/\r?\n/)) {
+    const values = line.split(",").map(Number).filter(Number.isFinite);
+    if (!values.length) continue;
+    const end = values[0] + Math.max(0, values[1] || 0);
+    if (end > maximum) maximum = end;
+  }
+  return maximum;
+}
+
+function selectDuration(data, filePath = "media file") {
+  const candidates = [
+    data?.format?.duration,
+    ...(data?.streams || []).map((stream) => stream.duration)
+  ]
+    .map(Number)
+    .filter((value) => Number.isFinite(value) && value > 0.05 && value < 86_400)
+    .sort((a, b) => b - a);
+  if (!candidates.length) {
+    throw new Error(`Could not read a valid duration from ${filePath}. Try remuxing the file to MP4 in DaVinci Resolve or FFmpeg.`);
+  }
+  return candidates[0];
 }
 
 function parseRate(value = "0/1") {
@@ -53,6 +97,7 @@ function parseRate(value = "0/1") {
 }
 
 async function sceneCuts(filePath, duration, threshold = 0.29) {
+  assertPositiveDuration(duration, filePath);
   const { stderr } = await run(FFMPEG, [
     "-hide_banner", "-nostats", "-i", filePath,
     "-t", String(duration),
@@ -65,6 +110,7 @@ async function sceneCuts(filePath, duration, threshold = 0.29) {
 }
 
 async function audioOnsets(filePath, duration) {
+  assertPositiveDuration(duration, filePath);
   const rate = 12000;
   const { stdout } = await run(FFMPEG, [
     "-hide_banner", "-loglevel", "error", "-i", filePath,
@@ -98,6 +144,7 @@ async function audioOnsets(filePath, duration) {
 }
 
 async function motionWindows(filePath, duration) {
+  assertPositiveDuration(duration, filePath);
   const width = 64;
   const height = 36;
   const fps = 4;
@@ -130,4 +177,10 @@ async function motionWindows(filePath, duration) {
   return selected;
 }
 
-module.exports = { run, probe, sceneCuts, audioOnsets, motionWindows, FFMPEG, FFPROBE };
+function assertPositiveDuration(duration, filePath) {
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error(`Invalid media duration for ${filePath}. Re-export or remux this file and try again.`);
+  }
+}
+
+module.exports = { run, probe, sceneCuts, audioOnsets, motionWindows, selectDuration, parsePacketDuration, FFMPEG, FFPROBE };
