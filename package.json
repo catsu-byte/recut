@@ -1,0 +1,50 @@
+{
+  "name": "recut",
+  "version": "0.1.0",
+  "private": true,
+  "author": "catsu-byte",
+  "description": "Reference-guided 30-second gaming montage editor for DaVinci Resolve Free.",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "build": "vite build",
+    "start": "electron .",
+    "test": "node --test tests/*.test.cjs",
+    "check": "npm run test && npm run build",
+    "smoke": "node scripts/smoke.cjs",
+    "dist": "npm run check && electron-builder --win portable"
+  },
+  "build": {
+    "appId": "dev.catsubyte.recut",
+    "productName": "ReCut",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**/*",
+      "node_modules/ffprobe-static/**/*"
+    ],
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable",
+      "artifactName": "ReCut-${version}-portable.${ext}"
+    },
+    "directories": {
+      "output": "release"
+    }
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "electron": "^38.2.2",
+    "electron-builder": "^26.0.12",
+    "vite": "^7.1.9",
+    "wait-on": "^8.0.4"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0"
+  }
+}
