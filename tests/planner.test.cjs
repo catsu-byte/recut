@@ -34,6 +34,19 @@ test("clip assignment stays inside source bounds", () => {
   }
 });
 
+test("one source clip can fill a complete montage", () => {
+  const blueprint = createBlueprint({ duration: 15, cuts: [2, 4, 7, 10, 12], onsets: [] });
+  const clips = [
+    { path: "single.mp4", duration: 45, candidates: [
+      { time: 4, score: 0.9 }, { time: 10, score: 0.8 }, { time: 18, score: 0.7 },
+      { time: 26, score: 0.6 }, { time: 35, score: 0.5 }
+    ] }
+  ];
+  const plan = assignClips(blueprint, clips);
+  assert.equal(plan.length, blueprint.segments.length);
+  assert.ok(plan.every((segment) => segment.sourcePath === "single.mp4"));
+});
+
 test("effect selection is deterministic", () => {
   assert.equal(chooseEffect(1, 0.9, true), "flash");
   assert.equal(chooseEffect(2, 0.9, true), "punch");

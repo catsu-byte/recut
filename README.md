@@ -31,7 +31,7 @@ npm install
 npm run dev
 ```
 
-Choose one reference edit, at least two gaming clips, an optional music file, and an output folder. Analyze the edit first, then create the montage.
+Choose one reference edit and one or more gaming clips. An optional music file can replace the reference audio. Analysis works immediately; choose an output folder only when you are ready to render the montage.
 
 ## Import into DaVinci Resolve Free
 

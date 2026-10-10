@@ -8,14 +8,14 @@ async function assertToolchain() {
   await Promise.all([run(FFMPEG, ["-version"]), run(FFPROBE, ["-version"])]);
 }
 
-function validateInput(input) {
+function validateInput(input, { requireOutput = true } = {}) {
   if (!input?.referencePath) throw new Error("Choose a reference edit first.");
-  if (!Array.isArray(input.clipPaths) || input.clipPaths.length < 2) throw new Error("Choose at least two gaming clips.");
-  if (!input.outputDirectory) throw new Error("Choose an output folder.");
+  if (!Array.isArray(input.clipPaths) || input.clipPaths.length < 1) throw new Error("Choose at least one gaming clip.");
+  if (requireOutput && !input.outputDirectory) throw new Error("Choose an output folder.");
 }
 
 async function inspectProject(input) {
-  validateInput(input);
+  validateInput(input, { requireOutput: false });
   const reference = await probe(input.referencePath);
   const targetDuration = clamp(Number(input.duration) || Math.min(reference.duration, 30), 15, Math.min(45, reference.duration));
   const [cuts, onsets, clips] = await Promise.all([

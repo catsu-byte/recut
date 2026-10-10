@@ -47,8 +47,8 @@ app.innerHTML = `
             <div class="step-number">02</div>
             <div class="step-copy">
               <h2>Gaming clips</h2>
-              <p>Pick at least two pre-selected highlights.</p>
-              <button class="file-button" id="pickClips"><span>Choose clips</span><kbd>MULTI</kbd></button>
+              <p>Pick one or more highlights. Choose again to add more.</p>
+              <button class="file-button" id="pickClips"><span>Add clips</span><kbd>1 OR MORE</kbd></button>
               <div class="file-value" id="clipsValue">No clips selected</div>
             </div>
           </article>
@@ -137,11 +137,12 @@ function updateUi() {
   byId("outputValue").textContent = state.outputDirectory || "Choose a folder";
   byId("durationValue").textContent = `${state.duration} sec`;
 
-  const ready = Boolean(state.referencePath && state.clipPaths.length >= 2 && state.outputDirectory);
-  byId("analyzeButton").disabled = !ready || state.busy;
-  byId("renderButton").disabled = !ready || !state.analysis || state.busy;
-  byId("readyState").textContent = ready ? "READY" : "SETUP NEEDED";
-  byId("readyState").classList.toggle("ready", ready);
+  const canAnalyze = Boolean(state.referencePath && state.clipPaths.length >= 1);
+  const canRender = Boolean(canAnalyze && state.outputDirectory && state.analysis);
+  byId("analyzeButton").disabled = !canAnalyze || state.busy;
+  byId("renderButton").disabled = !canRender || state.busy;
+  byId("readyState").textContent = canRender ? "READY TO RENDER" : canAnalyze ? "READY TO ANALYZE" : "ADD REFERENCE + CLIP";
+  byId("readyState").classList.toggle("ready", canAnalyze);
 }
 
 async function choose(handler, assign) {
@@ -158,7 +159,9 @@ async function choose(handler, assign) {
 }
 
 byId("pickReference").addEventListener("click", () => choose(window.recut.pickReference, ([value]) => { state.referencePath = value; }));
-byId("pickClips").addEventListener("click", () => choose(window.recut.pickClips, (values) => { state.clipPaths = values; }));
+byId("pickClips").addEventListener("click", () => choose(window.recut.pickClips, (values) => {
+  state.clipPaths = [...new Set([...state.clipPaths, ...values])];
+}));
 byId("pickMusic").addEventListener("click", () => choose(window.recut.pickMusic, ([value]) => { state.musicPath = value; }));
 byId("pickOutput").addEventListener("click", () => choose(window.recut.pickOutput, ([value]) => { state.outputDirectory = value; }));
 
