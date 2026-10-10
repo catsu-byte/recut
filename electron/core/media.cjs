@@ -109,11 +109,11 @@ async function sceneCuts(filePath, duration, threshold = 0.29) {
     .filter((time) => time > 0.12 && time < duration - 0.12);
 }
 
-async function audioOnsets(filePath, duration) {
+async function audioOnsets(filePath, duration, startTime = 0) {
   assertPositiveDuration(duration, filePath);
   const rate = 12000;
   const { stdout } = await run(FFMPEG, [
-    "-hide_banner", "-loglevel", "error", "-i", filePath,
+    "-hide_banner", "-loglevel", "error", "-ss", String(Math.max(0, startTime)), "-i", filePath,
     "-t", String(duration), "-vn", "-ac", "1", "-ar", String(rate),
     "-f", "f32le", "pipe:1"
   ]);
@@ -141,6 +141,73 @@ async function audioOnsets(filePath, duration) {
   }
   const maximum = Math.max(...peaks.map((peak) => peak.strength), 0.00001);
   return peaks.map((peak) => ({ ...peak, strength: peak.strength / maximum }));
+}
+
+async function audioEnvelope(filePath, maximumDuration = null) {
+  const rate = 4000;
+  const args = ["-hide_banner", "-loglevel", "error", "-i", filePath];
+  if (Number.isFinite(maximumDuration) && maximumDuration > 0) args.push("-t", String(maximumDuration));
+  args.push("-vn", "-ac", "1", "-ar", String(rate), "-f", "f32le", "pipe:1");
+  const { stdout } = await run(FFMPEG, args);
+  const samples = new Float32Array(stdout.buffer, stdout.byteOffset, Math.floor(stdout.byteLength / 4));
+  const hop = 200;
+  const envelope = [];
+  for (let offset = 0; offset + hop <= samples.length; offset += hop) {
+    let total = 0;
+    for (let index = offset; index < offset + hop; index += 1) total += samples[index] * samples[index];
+    envelope.push(Math.log10(1e-7 + Math.sqrt(total / hop)));
+  }
+  return { values: envelope, samplesPerSecond: rate / hop };
+}
+
+async function findAudioOffset(referencePath, musicPath, referenceDuration) {
+  const [reference, music] = await Promise.all([
+    audioEnvelope(referencePath, referenceDuration),
+    audioEnvelope(musicPath)
+  ]);
+  if (music.values.length <= reference.values.length + 2) return { offset: 0, confidence: 0 };
+  const result = correlateEnvelopes(reference.values, music.values);
+  return {
+    offset: result.index / reference.samplesPerSecond,
+    confidence: result.score
+  };
+}
+
+function correlateEnvelopes(referenceValues, musicValues) {
+  const reference = normalize(referenceValues);
+  const length = reference.length;
+  const prefix = [0];
+  const prefixSquare = [0];
+  for (const value of musicValues) {
+    prefix.push(prefix.at(-1) + value);
+    prefixSquare.push(prefixSquare.at(-1) + value * value);
+  }
+  let bestIndex = 0;
+  let bestScore = -Infinity;
+  for (let offset = 0; offset <= musicValues.length - length; offset += 1) {
+    const sum = prefix[offset + length] - prefix[offset];
+    const squareSum = prefixSquare[offset + length] - prefixSquare[offset];
+    const mean = sum / length;
+    const variance = Math.max(1e-9, squareSum / length - mean * mean);
+    const deviation = Math.sqrt(variance);
+    let dot = 0;
+    for (let index = 0; index < length; index += 1) {
+      dot += reference[index] * ((musicValues[offset + index] - mean) / deviation);
+    }
+    const score = dot / length;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = offset;
+    }
+  }
+  return { index: bestIndex, score: bestScore };
+}
+
+function normalize(values) {
+  const mean = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, values.length);
+  const deviation = Math.sqrt(Math.max(variance, 1e-9));
+  return values.map((value) => (value - mean) / deviation);
 }
 
 async function motionWindows(filePath, duration) {
@@ -183,4 +250,7 @@ function assertPositiveDuration(duration, filePath) {
   }
 }
 
-module.exports = { run, probe, sceneCuts, audioOnsets, motionWindows, selectDuration, parsePacketDuration, FFMPEG, FFPROBE };
+module.exports = {
+  run, probe, sceneCuts, audioOnsets, audioEnvelope, findAudioOffset, correlateEnvelopes,
+  motionWindows, selectDuration, parsePacketDuration, FFMPEG, FFPROBE
+};

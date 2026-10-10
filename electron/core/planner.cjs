@@ -117,4 +117,85 @@ function fallbackPick(pools, index) {
   return { clip, candidate: clip.candidates[index % clip.candidates.length] || { time: 0, score: 0 } };
 }
 
-module.exports = { clamp, createBlueprint, assignClips, chooseEffect };
+function createEventPlan({ duration, cuts, onsets, clips }) {
+  if (!clips.length) return { duration, segments: [], cuts: [], detectedSceneCuts: cuts.length, detectedBeats: onsets.length };
+  const boundaries = macroBoundaries(duration, cuts, clips.length);
+  const segments = clips.map((clip, index) => {
+    const timelineStart = boundaries[index];
+    const segmentDuration = boundaries[index + 1] - timelineStart;
+    const impact = detectImpact(clip.duration, clip.onsets || [], clip.candidates || []);
+    const postRoll = Math.min(0.55, Math.max(0.25, segmentDuration * 0.1));
+    const availableDuration = Math.min(clip.duration, segmentDuration);
+    const speed = availableDuration / segmentDuration;
+    const sourceStart = clamp(
+      impact.time - availableDuration + postRoll,
+      0,
+      Math.max(0, clip.duration - availableDuration)
+    );
+    return {
+      index,
+      timelineStart,
+      duration: segmentDuration,
+      intensity: impact.score,
+      effect: "clean",
+      sourcePath: clip.path,
+      sourceName: path.basename(clip.path),
+      sourceStart,
+      sourceDuration: availableDuration,
+      speed,
+      impactTime: impact.time,
+      motionScore: impact.motionScore
+    };
+  });
+  return {
+    duration,
+    segments,
+    cuts: boundaries.slice(1, -1),
+    detectedSceneCuts: cuts.length,
+    detectedBeats: onsets.length
+  };
+}
+
+function macroBoundaries(duration, cuts, clipCount) {
+  if (clipCount <= 1) return [0, duration];
+  const candidates = uniqueTimes(cuts.filter((time) => time > 0.4 && time < duration - 0.4), 0.16);
+  const selected = [];
+  for (let index = 1; index < clipCount; index += 1) {
+    const target = (duration * index) / clipCount;
+    const minimum = (selected.at(-1) || 0) + 1.25;
+    const maximum = duration - (clipCount - index) * 1.25;
+    const available = candidates.filter((time) => time >= minimum && time <= maximum && !selected.includes(time));
+    const nearest = available.sort((a, b) => Math.abs(a - target) - Math.abs(b - target))[0];
+    selected.push(nearest ?? clamp(target, minimum, maximum));
+  }
+  return [0, ...selected.sort((a, b) => a - b), duration];
+}
+
+function detectImpact(duration, onsets, motionCandidates) {
+  const motionMaximum = Math.max(...motionCandidates.map((item) => item.score), 0.00001);
+  const candidates = onsets
+    .filter((item) => item.time >= duration * 0.18 && item.time <= duration - 0.12)
+    .map((onset) => {
+      const nearestMotion = motionCandidates.reduce((best, motion) => {
+        const distance = Math.abs(motion.time - onset.time);
+        return distance < best.distance ? { distance, score: motion.score } : best;
+      }, { distance: Infinity, score: 0 });
+      const motionScore = (nearestMotion.score / motionMaximum) * Math.max(0, 1 - nearestMotion.distance / 1.1);
+      const lateBias = onset.time / duration;
+      return {
+        time: onset.time,
+        score: onset.strength * 0.62 + motionScore * 0.28 + lateBias * 0.1,
+        motionScore
+      };
+    });
+  if (!candidates.length) {
+    const fallback = motionCandidates.sort((a, b) => b.time - a.time)[0];
+    return { time: fallback?.time || duration * 0.8, score: fallback?.score || 0, motionScore: fallback?.score || 0 };
+  }
+  return candidates.sort((a, b) => b.score - a.score)[0];
+}
+
+module.exports = {
+  clamp, createBlueprint, assignClips, chooseEffect,
+  createEventPlan, macroBoundaries, detectImpact
+};

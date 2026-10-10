@@ -1,9 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createBlueprint, assignClips, chooseEffect } = require("../electron/core/planner.cjs");
+const { createBlueprint, assignClips, chooseEffect, createEventPlan, macroBoundaries, detectImpact } = require("../electron/core/planner.cjs");
 const { createFcpxml, escapeXml } = require("../electron/core/exporters.cjs");
-const { selectDuration, parsePacketDuration } = require("../electron/core/media.cjs");
-const { montageDuration } = require("../electron/core/pipeline.cjs");
+const { selectDuration, parsePacketDuration, correlateEnvelopes } = require("../electron/core/media.cjs");
+const { montageDuration, outputProfile } = require("../electron/core/pipeline.cjs");
 
 test("blueprint keeps the requested montage duration", () => {
   const blueprint = createBlueprint({
@@ -97,4 +97,37 @@ test("montage duration supports references shorter than fifteen seconds", () => 
 
 test("packet timestamps provide a fallback duration", () => {
   assert.ok(Math.abs(parsePacketDuration("0.000000,0.033333\n12.500000,0.033333\n28.383000,0.034000\n") - 28.417) < 0.000001);
+});
+
+test("audio correlation finds the matching music section", () => {
+  const reference = [0, 1, 0.5, -0.5, -1, 0.25];
+  const music = [8, 8, 8, 0, 2, 1, -1, -2, 0.5, 8, 8];
+  assert.equal(correlateEnvelopes(reference, music).index, 3);
+});
+
+test("macro cuts follow nearby reference transitions", () => {
+  assert.deepEqual(macroBoundaries(25, [3.1, 7.2, 9.5, 14.4, 19.8], 5), [0, 3.1, 9.5, 14.4, 19.8, 25]);
+});
+
+test("event planner uses each source clip once and ends after impact", () => {
+  const clips = ["a", "b", "c"].map((name, index) => ({
+    path: `${name}.mp4`, duration: 8,
+    onsets: [{ time: 5 + index * 0.2, strength: 1 }],
+    candidates: [{ time: 5 + index * 0.2, score: 0.8 }]
+  }));
+  const plan = createEventPlan({ duration: 18, cuts: [5.8, 12.2], onsets: [], clips });
+  assert.deepEqual(plan.segments.map((segment) => segment.sourcePath), ["a.mp4", "b.mp4", "c.mp4"]);
+  assert.ok(plan.segments.every((segment) => segment.sourceStart + segment.sourceDuration > segment.impactTime));
+  assert.ok(plan.segments.every((segment) => segment.effect === "clean"));
+});
+
+test("impact detection combines sound and visual change", () => {
+  const impact = detectImpact(8, [{ time: 2, strength: 0.4 }, { time: 6, strength: 1 }], [{ time: 6.1, score: 0.8 }]);
+  assert.equal(impact.time, 6);
+});
+
+test("output profile does not upscale low-resolution source clips", () => {
+  assert.deepEqual(outputProfile([{ width: 640, height: 360, fps: 29 }, { width: 640, height: 360, fps: 29 }], "16:9"), {
+    width: 640, height: 360, fps: 29
+  });
 });

@@ -1,7 +1,7 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { run, probe, sceneCuts, audioOnsets, motionWindows, FFMPEG, FFPROBE } = require("./media.cjs");
-const { clamp, createBlueprint, assignClips } = require("./planner.cjs");
+const { run, probe, sceneCuts, audioOnsets, findAudioOffset, motionWindows, FFMPEG, FFPROBE } = require("./media.cjs");
+const { clamp, createEventPlan } = require("./planner.cjs");
 const { createFcpxml, createReport } = require("./exporters.cjs");
 
 async function assertToolchain() {
@@ -18,17 +18,23 @@ async function inspectProject(input) {
   validateInput(input, { requireOutput: false });
   const reference = await probe(input.referencePath);
   const targetDuration = montageDuration(input.duration, reference.duration);
+  const audioMatch = input.musicPath
+    ? await findAudioOffset(input.referencePath, input.musicPath, targetDuration)
+    : { offset: 0, confidence: 1 };
   const [cuts, onsets, clips] = await Promise.all([
-    sceneCuts(input.referencePath, targetDuration),
-    audioOnsets(input.musicPath || input.referencePath, targetDuration),
+    sceneCuts(input.referencePath, targetDuration, 0.08),
+    audioOnsets(input.musicPath || input.referencePath, targetDuration, audioMatch.offset),
     Promise.all(input.clipPaths.map(async (clipPath) => {
       const info = await probe(clipPath);
-      return { ...info, candidates: await motionWindows(clipPath, info.duration) };
+      const [candidates, clipOnsets] = await Promise.all([
+        motionWindows(clipPath, info.duration),
+        audioOnsets(clipPath, info.duration)
+      ]);
+      return { ...info, candidates, onsets: clipOnsets };
     }))
   ]);
-  const blueprint = createBlueprint({ duration: targetDuration, cuts, onsets });
-  const plan = assignClips(blueprint, clips);
-  return summarize(blueprint, plan, reference);
+  const blueprint = createEventPlan({ duration: targetDuration, cuts, onsets, clips });
+  return { ...summarize(blueprint, blueprint.segments, reference), musicOffset: audioMatch.offset, musicMatchConfidence: audioMatch.confidence };
 }
 
 async function renderProject(input, progress = () => {}) {
@@ -36,31 +42,37 @@ async function renderProject(input, progress = () => {}) {
   progress({ stage: "reference", percent: 3, message: "Reading the reference edit" });
   const reference = await probe(input.referencePath);
   const targetDuration = montageDuration(input.duration, reference.duration);
-  const width = input.aspectRatio === "9:16" ? 1080 : 1920;
-  const height = input.aspectRatio === "9:16" ? 1920 : 1080;
-  const fps = 30;
 
-  progress({ stage: "reference", percent: 8, message: "Detecting cuts and audio peaks" });
+  progress({ stage: "reference", percent: 7, message: "Matching the reference music section" });
+  const audioMatch = input.musicPath
+    ? await findAudioOffset(input.referencePath, input.musicPath, targetDuration)
+    : { offset: 0, confidence: 1 };
+
+  progress({ stage: "reference", percent: 12, message: "Detecting reference cuts and rhythm" });
   const [cuts, onsets] = await Promise.all([
-    sceneCuts(input.referencePath, targetDuration),
-    audioOnsets(input.musicPath || input.referencePath, targetDuration)
+    sceneCuts(input.referencePath, targetDuration, 0.08),
+    audioOnsets(input.musicPath || input.referencePath, targetDuration, audioMatch.offset)
   ]);
-  const blueprint = createBlueprint({ duration: targetDuration, cuts, onsets });
 
   progress({ stage: "clips", percent: 18, message: `Scanning ${input.clipPaths.length} gaming clips` });
   const clips = [];
   for (let index = 0; index < input.clipPaths.length; index += 1) {
     const clipPath = input.clipPaths[index];
     const info = await probe(clipPath);
-    const candidates = await motionWindows(clipPath, info.duration);
-    clips.push({ ...info, candidates });
+    const [candidates, clipOnsets] = await Promise.all([
+      motionWindows(clipPath, info.duration),
+      audioOnsets(clipPath, info.duration)
+    ]);
+    clips.push({ ...info, candidates, onsets: clipOnsets });
     progress({
       stage: "clips",
       percent: 18 + Math.round(((index + 1) / input.clipPaths.length) * 20),
       message: `Scanned clip ${index + 1} of ${input.clipPaths.length}`
     });
   }
-  const plan = assignClips(blueprint, clips);
+  const blueprint = createEventPlan({ duration: targetDuration, cuts, onsets, clips });
+  const plan = blueprint.segments;
+  const { width, height, fps } = outputProfile(clips, input.aspectRatio);
   const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
   const projectDirectory = path.join(input.outputDirectory, `recut-${stamp}`);
   const segmentDirectory = path.join(projectDirectory, "segments");
@@ -83,14 +95,23 @@ async function renderProject(input, progress = () => {}) {
   progress({ stage: "assemble", percent: 84, message: "Assembling preview and music" });
   const previewPath = path.join(projectDirectory, "recut-preview.mp4");
   const audioPath = input.musicPath || input.referencePath;
-  await concatenate(renderedPlan, previewPath, audioPath, targetDuration, projectDirectory);
+  await concatenate(renderedPlan, previewPath, audioPath, audioMatch.offset, targetDuration, projectDirectory);
 
   progress({ stage: "export", percent: 94, message: "Writing the DaVinci Resolve timeline" });
   const timelinePath = path.join(projectDirectory, "recut-timeline.fcpxml");
   const reportPath = path.join(projectDirectory, "recut-report.json");
   await Promise.all([
-    fs.writeFile(timelinePath, createFcpxml({ segments: renderedPlan, musicPath: audioPath, width, height, fps }), "utf8"),
-    fs.writeFile(reportPath, JSON.stringify(createReport({ blueprint, plan: renderedPlan, referencePath: input.referencePath, musicPath: audioPath, outputPath: previewPath }), null, 2), "utf8")
+    fs.writeFile(timelinePath, createFcpxml({ segments: renderedPlan, musicPath: audioPath, musicOffset: audioMatch.offset, width, height, fps }), "utf8"),
+    fs.writeFile(reportPath, JSON.stringify(createReport({
+      blueprint,
+      plan: renderedPlan,
+      referencePath: input.referencePath,
+      musicPath: audioPath,
+      musicOffset: audioMatch.offset,
+      musicMatchConfidence: audioMatch.confidence,
+      outputProfile: { width, height, fps },
+      outputPath: previewPath
+    }), null, 2), "utf8")
   ]);
   progress({ stage: "done", percent: 100, message: "Your montage is ready" });
   return {
@@ -98,8 +119,24 @@ async function renderProject(input, progress = () => {}) {
     projectDirectory,
     previewPath,
     timelinePath,
-    reportPath
+    reportPath,
+    musicOffset: audioMatch.offset,
+    musicMatchConfidence: audioMatch.confidence,
+    outputProfile: { width, height, fps }
   };
+}
+
+function outputProfile(clips, aspectRatio) {
+  const valid = clips.filter((clip) => clip.width > 0 && clip.height > 0);
+  const sourceWidth = Math.min(...valid.map((clip) => clip.width), 1920);
+  const sourceHeight = Math.min(...valid.map((clip) => clip.height), 1080);
+  const fps = Math.max(24, Math.min(60, Math.floor(Math.min(...valid.map((clip) => clip.fps || 30)))));
+  if (aspectRatio === "9:16") {
+    const height = Math.min(sourceHeight || 1920, 1920);
+    return { width: Math.max(360, Math.round((height * 9) / 16 / 2) * 2), height, fps };
+  }
+  const width = Math.min(sourceWidth || 1920, 1920);
+  return { width, height: Math.max(360, Math.round((width * 9) / 16 / 2) * 2), fps };
 }
 
 function montageDuration(requestedDuration, referenceDuration) {
@@ -120,7 +157,7 @@ async function renderSegment(segment, outputPath, { width, height, fps }) {
     "-ss", segment.sourceStart.toFixed(3), "-t", segment.sourceDuration.toFixed(3),
     "-i", segment.sourcePath,
     "-vf", `${filters},${speed},fps=${fps},format=yuv420p`,
-    "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+    "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "16",
     "-t", segment.duration.toFixed(3), outputPath
   ]);
 }
@@ -144,14 +181,14 @@ function effectFilters(effect, base, width, height, duration) {
   return base;
 }
 
-async function concatenate(plan, outputPath, audioPath, duration, workingDirectory) {
+async function concatenate(plan, outputPath, audioPath, audioOffset, duration, workingDirectory) {
   const concatPath = path.join(workingDirectory, "segments.txt");
   const lines = plan.map((segment) => `file '${segment.renderedPath.replaceAll("'", "'\\''").replaceAll("\\", "/")}'`);
   await fs.writeFile(concatPath, `${lines.join("\n")}\n`, "utf8");
   await run(FFMPEG, [
     "-hide_banner", "-loglevel", "error", "-y",
     "-f", "concat", "-safe", "0", "-i", concatPath,
-    "-i", audioPath,
+    "-ss", Math.max(0, audioOffset).toFixed(3), "-i", audioPath,
     "-map", "0:v:0", "-map", "1:a:0?",
     "-c:v", "copy", "-c:a", "aac", "-b:a", "256k",
     "-af", `afade=t=out:st=${Math.max(0, duration - 0.35).toFixed(3)}:d=0.35`,
@@ -175,4 +212,4 @@ function summarize(blueprint, plan, reference) {
   };
 }
 
-module.exports = { assertToolchain, inspectProject, renderProject, effectFilters, montageDuration };
+module.exports = { assertToolchain, inspectProject, renderProject, effectFilters, montageDuration, outputProfile };

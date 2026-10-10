@@ -14,7 +14,11 @@ function frames(seconds, fps) {
   return Math.max(1, Math.round(seconds * fps));
 }
 
-function createFcpxml({ segments, musicPath, width, height, fps = 30 }) {
+function zeroFrames(seconds, fps) {
+  return Math.max(0, Math.round(seconds * fps));
+}
+
+function createFcpxml({ segments, musicPath, musicOffset = 0, width, height, fps = 30 }) {
   const resources = segments.map((segment, index) => {
     const id = `r${index + 2}`;
     const duration = frames(segment.duration, fps);
@@ -23,7 +27,8 @@ function createFcpxml({ segments, musicPath, width, height, fps = 30 }) {
   let musicId = null;
   if (musicPath) {
     musicId = `r${segments.length + 2}`;
-    resources.push(`    <asset id="${musicId}" name="${escapeXml(path.basename(musicPath))}" start="0s" duration="${frames(segments.reduce((sum, item) => sum + item.duration, 0), fps)}/${fps}s" hasAudio="1" audioSources="1" audioChannels="2" src="${escapeXml(pathToFileURL(musicPath).href)}"/>`);
+    const musicAssetDuration = musicOffset + segments.reduce((sum, item) => sum + item.duration, 0);
+    resources.push(`    <asset id="${musicId}" name="${escapeXml(path.basename(musicPath))}" start="0s" duration="${frames(musicAssetDuration, fps)}/${fps}s" hasAudio="1" audioSources="1" audioChannels="2" src="${escapeXml(pathToFileURL(musicPath).href)}"/>`);
   }
   let offsetFrames = 0;
   const clips = segments.map((segment, index) => {
@@ -33,7 +38,7 @@ function createFcpxml({ segments, musicPath, width, height, fps = 30 }) {
     return item;
   });
   if (musicId) {
-    clips[0] = clips[0].replace("/>", `>\n              <asset-clip ref="${musicId}" lane="-1" offset="0s" start="0s" duration="${offsetFrames}/${fps}s" name="Music"/>\n            </asset-clip>`);
+    clips[0] = clips[0].replace("/>", `>\n              <asset-clip ref="${musicId}" lane="-1" offset="0s" start="${zeroFrames(musicOffset, fps)}/${fps}s" duration="${offsetFrames}/${fps}s" name="Music"/>\n            </asset-clip>`);
   }
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fcpxml>
@@ -57,16 +62,19 @@ ${clips.join("\n")}
 `;
 }
 
-function createReport({ blueprint, plan, referencePath, musicPath, outputPath }) {
+function createReport({ blueprint, plan, referencePath, musicPath, musicOffset = 0, musicMatchConfidence = 0, outputProfile = null, outputPath }) {
   return {
     generatedAt: new Date().toISOString(),
     referencePath,
     musicPath,
+    musicOffset: round(musicOffset),
+    musicMatchConfidence: round(musicMatchConfidence),
+    outputProfile,
     outputPath,
     duration: blueprint.duration,
     detectedSceneCuts: blueprint.detectedSceneCuts,
     detectedBeats: blueprint.detectedBeats,
-    segments: plan.map(({ index, timelineStart, duration, sourcePath, sourceStart, speed, effect, intensity, motionScore }) => ({
+    segments: plan.map(({ index, timelineStart, duration, sourcePath, sourceStart, speed, effect, intensity, motionScore, impactTime }) => ({
       index,
       timelineStart: round(timelineStart),
       duration: round(duration),
@@ -75,7 +83,8 @@ function createReport({ blueprint, plan, referencePath, musicPath, outputPath })
       speed: round(speed),
       effect,
       intensity: round(intensity),
-      motionScore: round(motionScore)
+      motionScore: round(motionScore),
+      impactTime: round(impactTime || 0)
     }))
   };
 }
