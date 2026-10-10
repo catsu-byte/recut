@@ -62,13 +62,14 @@ ${clips.join("\n")}
 `;
 }
 
-function createReport({ blueprint, plan, referencePath, musicPath, musicOffset = 0, musicMatchConfidence = 0, outputProfile = null, captions = null, outputPath }) {
+function createReport({ blueprint, plan, referencePath, musicPath, musicOffset = 0, musicMatchConfidence = 0, musicMatchMethod = null, outputProfile = null, captions = null, outputPath }) {
   return {
     generatedAt: new Date().toISOString(),
     referencePath,
     musicPath,
     musicOffset: round(musicOffset),
     musicMatchConfidence: round(musicMatchConfidence),
+    musicMatchMethod,
     outputProfile,
     captions,
     outputPath,

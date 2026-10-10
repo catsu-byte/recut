@@ -26,7 +26,7 @@ function mapWordsToTimeline(plan, transcripts) {
 
 function createCaptionPlan(plan, transcripts) {
   const words = mapWordsToTimeline(plan, transcripts);
-  const captions = groupWords(words);
+  const captions = groupWords(words).filter((caption) => caption.words.length > 1 || keywordText(caption.text).length >= 4);
   const keywords = plan.flatMap((segment) => {
     const impact = segment.timelineStart + (segment.impactTime - segment.sourceStart) / segment.speed;
     const candidates = words
@@ -39,6 +39,38 @@ function createCaptionPlan(plan, transcripts) {
       text: keywordText(word.text).toUpperCase(),
       start: clamp(impact - 0.08, segment.timelineStart, segment.timelineStart + segment.duration),
       end: clamp(impact + 0.62, segment.timelineStart, segment.timelineStart + segment.duration),
+      segmentIndex: segment.index
+    }];
+  });
+  return { words, captions, keywords };
+}
+
+function createLyricCaptionPlan(plan, transcript) {
+  const words = (transcript?.segments || []).flatMap((segment) => segment.words || [])
+    .map((word) => ({
+      text: word.text,
+      probability: word.probability,
+      start: Math.max(0, word.start),
+      end: Math.max(word.start + 0.03, word.end)
+    }))
+    .sort((a, b) => a.start - b.start);
+  const captions = groupWords(words).filter((caption) => caption.words.length > 1 || keywordText(caption.text).length >= 4);
+  const keywords = plan.flatMap((segment) => {
+    const impact = clamp(
+      segment.timelineStart + (segment.impactTime - segment.sourceStart) / segment.speed,
+      segment.timelineStart,
+      segment.timelineStart + segment.duration
+    );
+    const candidates = words
+      .filter((word) => Math.abs(midpoint(word) - impact) <= 1.1)
+      .filter((word) => keywordText(word.text).length >= 3 && !STOP_WORDS.has(keywordText(word.text).toLowerCase()))
+      .sort((a, b) => keywordScore(b, impact) - keywordScore(a, impact));
+    const word = candidates[0];
+    if (!word) return [];
+    return [{
+      text: keywordText(word.text).toUpperCase(),
+      start: Math.max(segment.timelineStart, impact - 0.06),
+      end: impact + 0.68,
       segmentIndex: segment.index
     }];
   });
@@ -67,14 +99,11 @@ function groupWords(words) {
 
 function createAss({ captions, keywords }, { width, height }) {
   const baseSize = Math.max(18, Math.round(height * 0.052));
-  const keywordSize = Math.max(32, Math.round(height * 0.115));
+  const keywordSize = Math.max(36, Math.round(height * 0.13));
   const bottomMargin = Math.round(height * 0.075);
   const events = [
     ...captions.map((caption) => dialogue("Caption", caption.start, caption.end, escapeAss(caption.text))),
-    ...keywords.map((keyword) => dialogue(
-      "Keyword", keyword.start, keyword.end,
-      `{\\an5\\pos(${Math.round(width / 2)},${Math.round(height * 0.46)})\\fscx65\\fscy65\\t(0,130,\\fscx118\\fscy118)\\t(130,260,\\fscx100\\fscy100)}${escapeAss(keyword.text)}`
-    ))
+    ...keywords.flatMap((keyword, index) => keywordEvents(keyword, index, width, height))
   ].sort((a, b) => a.start - b.start).map((item) => item.line);
   return `[Script Info]
 ScriptType: v4.00+
@@ -85,8 +114,9 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,Arial,${baseSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&HCC000000,-1,0,0,0,100,100,0,0,3,5,0,2,28,28,${bottomMargin},1
-Style: Keyword,Arial Black,${keywordSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,1.2,0,1,5,2,5,20,20,20,1
+Style: Caption,Arial,${baseSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&HDA000000,-1,0,0,0,100,100,0,0,3,4,0,2,28,28,${bottomMargin},1
+Style: KeywordGlow,Impact,${keywordSize},&H507E62FF,&H507E62FF,&H407E62FF,&H00000000,-1,0,0,0,100,100,1.6,0,1,9,0,5,20,20,20,1
+Style: Keyword,Impact,${keywordSize},&H00FFFFFF,&H00FFFFFF,&H00100818,&H804C35FF,-1,0,0,0,100,100,1.6,0,1,2,6,5,20,20,20,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -94,8 +124,25 @@ ${events.join("\n")}
 `;
 }
 
-function dialogue(style, start, end, text) {
-  return { start, line: `Dialogue: ${style === "Keyword" ? 1 : 0},${assTime(start)},${assTime(Math.max(end, start + 0.08))},${style},,0,0,0,,${text}` };
+function keywordEvents(keyword, index, width, height) {
+  const palette = [
+    { front: "&H00FFFFFF&", accent: "&H006B55FF&", rotation: -5 },
+    { front: "&H003F5BFF&", accent: "&H003F5BFF&", rotation: 4 },
+    { front: "&H006DFF72&", accent: "&H006DFF72&", rotation: -3 },
+    { front: "&H00FFB45E&", accent: "&H00FFB45E&", rotation: 5 }
+  ][index % 4];
+  const x = Math.round(width / 2);
+  const y = Math.round(height * 0.43);
+  const animation = `\\an5\\pos(${x},${y})\\frz${palette.rotation}\\fscx35\\fscy35\\t(0,105,\\fscx128\\fscy128\\frz0)\\t(105,235,\\fscx100\\fscy100)\\fad(20,110)`;
+  const text = escapeAss(keyword.text);
+  return [
+    dialogue("KeywordGlow", keyword.start, keyword.end, `{${animation}\\c${palette.accent}\\3c${palette.accent}\\blur5}${text}`, 1),
+    dialogue("Keyword", keyword.start, keyword.end, `{${animation}\\c${palette.front}\\4c${palette.accent}}${text}`, 2)
+  ];
+}
+
+function dialogue(style, start, end, text, layer = 0) {
+  return { start, line: `Dialogue: ${layer},${assTime(start)},${assTime(Math.max(end, start + 0.08))},${style},,0,0,0,,${text}` };
 }
 
 function assTime(seconds) {
@@ -119,7 +166,7 @@ function keywordText(value) {
 }
 
 function keywordScore(word, impact) {
-  return (word.probability || 0) * 0.55 + Math.min(keywordText(word.text).length / 10, 1) * 0.2 + Math.max(0, 1 - Math.abs(midpoint(word) - impact) / 1.35) * 0.25;
+  return (word.probability || 0) * 0.35 + Math.min(keywordText(word.text).length / 10, 1) * 0.15 + Math.max(0, 1 - Math.abs(midpoint(word) - impact) / 1.35) * 0.5;
 }
 
 function midpoint(word) {
@@ -134,4 +181,4 @@ function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-module.exports = { mapWordsToTimeline, createCaptionPlan, createAss, assTime, escapeAss };
+module.exports = { mapWordsToTimeline, createCaptionPlan, createLyricCaptionPlan, createAss, assTime, escapeAss };

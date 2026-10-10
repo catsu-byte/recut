@@ -4,7 +4,7 @@ const { createBlueprint, assignClips, chooseEffect, createEventPlan, macroBounda
 const { createFcpxml, escapeXml } = require("../electron/core/exporters.cjs");
 const { selectDuration, parsePacketDuration, correlateEnvelopes } = require("../electron/core/media.cjs");
 const { montageDuration, outputProfile } = require("../electron/core/pipeline.cjs");
-const { createCaptionPlan, createAss } = require("../electron/core/captions.cjs");
+const { createCaptionPlan, createLyricCaptionPlan, createAss } = require("../electron/core/captions.cjs");
 
 test("blueprint keeps the requested montage duration", () => {
   const blueprint = createBlueprint({
@@ -110,16 +110,19 @@ test("macro cuts follow nearby reference transitions", () => {
   assert.deepEqual(macroBoundaries(25, [3.1, 7.2, 9.5, 14.4, 19.8], 5), [0, 3.1, 9.5, 14.4, 19.8, 25]);
 });
 
-test("event planner uses each source clip once and ends after impact", () => {
+test("event planner preserves source order and ends each macro shot after impact", () => {
   const clips = ["a", "b", "c"].map((name, index) => ({
     path: `${name}.mp4`, duration: 8,
     onsets: [{ time: 5 + index * 0.2, strength: 1 }],
     candidates: [{ time: 5 + index * 0.2, score: 0.8 }]
   }));
   const plan = createEventPlan({ duration: 18, cuts: [5.8, 12.2], onsets: [], clips });
-  assert.deepEqual(plan.segments.map((segment) => segment.sourcePath), ["a.mp4", "b.mp4", "c.mp4"]);
-  assert.ok(plan.segments.every((segment) => segment.sourceStart + segment.sourceDuration > segment.impactTime));
-  assert.ok(plan.segments.every((segment) => segment.effect === "clean"));
+  assert.deepEqual([...new Set(plan.segments.map((segment) => segment.sourcePath))], ["a.mp4", "b.mp4", "c.mp4"]);
+  for (const sourcePath of ["a.mp4", "b.mp4", "c.mp4"]) {
+    const finalShot = plan.segments.filter((segment) => segment.sourcePath === sourcePath).at(-1);
+    assert.ok(finalShot.sourceStart + finalShot.sourceDuration > finalShot.impactTime);
+  }
+  assert.ok(plan.segments.some((segment) => segment.effect === "impact"));
 });
 
 test("impact detection combines sound and visual change", () => {
@@ -127,9 +130,9 @@ test("impact detection combines sound and visual change", () => {
   assert.equal(impact.time, 6);
 });
 
-test("output profile does not upscale low-resolution source clips", () => {
+test("output profile creates a sharpened HD delivery canvas", () => {
   assert.deepEqual(outputProfile([{ width: 640, height: 360, fps: 29 }, { width: 640, height: 360, fps: 29 }], "16:9"), {
-    width: 640, height: 360, fps: 29
+    width: 1280, height: 720, fps: 29
   });
 });
 
@@ -156,7 +159,22 @@ test("ASS output uses a boxed bottom caption and animated keyword style", () => 
     captions: [{ text: "mein Gott", start: 1, end: 2 }],
     keywords: [{ text: "GOTT", start: 1.4, end: 2 }]
   }, { width: 640, height: 360 });
-  assert.match(ass, /Style: Caption,Arial,19,[^\n]+,3,5,0,2/);
-  assert.match(ass, /\\fscx65.*\\t\(0,130,\\fscx118/);
-  assert.match(ass, /Dialogue: 1,0:00:01\.40,0:00:02\.00,Keyword/);
+  assert.match(ass, /Style: Caption,Arial,19,[^\n]+,3,4,0,2/);
+  assert.match(ass, /Style: KeywordGlow,Impact/);
+  assert.match(ass, /\\fscx35.*\\t\(0,105,\\fscx128/);
+  assert.match(ass, /Dialogue: 2,0:00:01\.40,0:00:02\.00,Keyword/);
+});
+
+test("lyric captions use song timestamps and promote words near impacts", () => {
+  const plan = [{
+    index: 0, timelineStart: 0, duration: 4, sourcePath: "clip.mp4",
+    sourceStart: 1, sourceDuration: 4, speed: 1, impactTime: 3.5
+  }];
+  const transcript = { segments: [{ words: [
+    { text: "Everything", start: 1.9, end: 2.2, probability: 0.9 },
+    { text: "fine", start: 2.4, end: 2.8, probability: 0.95 }
+  ] }] };
+  const result = createLyricCaptionPlan(plan, transcript);
+  assert.equal(result.captions[0].text, "Everything fine");
+  assert.equal(result.keywords[0].text, "FINE");
 });

@@ -21,7 +21,7 @@ app.innerHTML = `
         <span class="brand-mark"><i></i><i></i><i></i></span>
         <span>ReCut</span>
       </a>
-      <div class="top-meta"><span class="status-dot"></span> Local processing <span class="version">v0.2</span></div>
+      <div class="top-meta"><span class="status-dot"></span> Local processing <span class="version">v0.3</span></div>
     </header>
 
     <main>
@@ -37,7 +37,7 @@ app.innerHTML = `
             <div class="step-number">01</div>
             <div class="step-copy">
               <h2>Reference edit</h2>
-              <p>We read its cuts, pace, beats and intensity.</p>
+              <p>We read its cuts, impact effects, pace, beats and color.</p>
               <button class="file-button" id="pickReference"><span>Choose reference</span><kbd>MP4</kbd></button>
               <div class="file-value" id="referenceValue">Nothing selected</div>
             </div>
@@ -115,7 +115,7 @@ app.innerHTML = `
         <div>
           <p class="eyebrow">EXPORT COMPLETE</p>
           <h2>Your montage is ready.</h2>
-          <p id="resultSummary">Preview video, subtitles, editable Resolve timeline and analysis report were created.</p>
+          <p id="resultSummary">Preview video, lyric captions, editable Resolve timeline and analysis report were created.</p>
         </div>
         <button id="revealButton">Show files <span>↗</span></button>
       </section>
@@ -212,8 +212,8 @@ byId("renderButton").addEventListener("click", async () => {
     showAnalysis(state.result);
     const captions = state.result.captions;
     byId("resultSummary").textContent = captions?.status === "ready"
-      ? `Created ${captions.phrases} subtitle phrase${captions.phrases === 1 ? "" : "s"} and ${captions.keywords} on-beat impact word${captions.keywords === 1 ? "" : "s"}.`
-      : "Montage created. Automatic speech captions were unavailable on this computer.";
+      ? `Created ${captions.phrases} lyric phrase${captions.phrases === 1 ? "" : "s"} and ${captions.keywords} on-beat impact word${captions.keywords === 1 ? "" : "s"}.`
+      : "Montage created. Automatic lyric transcription was unavailable on this computer.";
     byId("resultCard").classList.remove("hidden");
     byId("resultCard").scrollIntoView({ behavior: "smooth", block: "center" });
   } catch (error) {

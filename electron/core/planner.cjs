@@ -119,38 +119,52 @@ function fallbackPick(pools, index) {
 
 function createEventPlan({ duration, cuts, onsets, clips }) {
   if (!clips.length) return { duration, segments: [], cuts: [], detectedSceneCuts: cuts.length, detectedBeats: onsets.length };
-  const boundaries = macroBoundaries(duration, cuts, clips.length);
-  const segments = clips.map((clip, index) => {
-    const timelineStart = boundaries[index];
-    const segmentDuration = boundaries[index + 1] - timelineStart;
+  const macro = macroBoundaries(duration, cuts, clips.length);
+  const segments = [];
+  clips.forEach((clip, clipIndex) => {
+    const macroStart = macro[clipIndex];
+    const macroEnd = macro[clipIndex + 1];
+    const macroDuration = macroEnd - macroStart;
     const impact = detectImpact(clip.duration, clip.onsets || [], clip.candidates || []);
-    const postRoll = Math.min(0.55, Math.max(0.25, segmentDuration * 0.1));
-    const availableDuration = Math.min(clip.duration, segmentDuration);
-    const speed = availableDuration / segmentDuration;
-    const sourceStart = clamp(
+    const postRoll = Math.min(0.55, Math.max(0.25, macroDuration * 0.1));
+    const availableDuration = Math.min(clip.duration, macroDuration);
+    const speed = availableDuration / macroDuration;
+    const macroSourceStart = clamp(
       impact.time - availableDuration + postRoll,
       0,
       Math.max(0, clip.duration - availableDuration)
     );
-    return {
-      index,
-      timelineStart,
-      duration: segmentDuration,
-      intensity: impact.score,
-      effect: "clean",
-      sourcePath: clip.path,
-      sourceName: path.basename(clip.path),
-      sourceStart,
-      sourceDuration: availableDuration,
-      speed,
-      impactTime: impact.time,
-      motionScore: impact.motionScore
-    };
+    const internalCuts = cuts.filter((time) => time > macroStart + 0.28 && time < macroEnd - 0.28);
+    const shotBoundaries = uniqueTimes([macroStart, ...internalCuts, macroEnd], 0.24);
+    for (let shotIndex = 0; shotIndex < shotBoundaries.length - 1; shotIndex += 1) {
+      const timelineStart = shotBoundaries[shotIndex];
+      const segmentDuration = shotBoundaries[shotIndex + 1] - timelineStart;
+      const sourceStart = macroSourceStart + (timelineStart - macroStart) * speed;
+      const sourceDuration = segmentDuration * speed;
+      const sourceEnd = sourceStart + sourceDuration;
+      const containsImpact = impact.time >= sourceStart - 0.08 && impact.time <= sourceEnd + 0.08;
+      const index = segments.length;
+      segments.push({
+        index,
+        clipIndex,
+        timelineStart,
+        duration: segmentDuration,
+        intensity: containsImpact ? impact.score : Math.max(0.3, impact.score * 0.62),
+        effect: containsImpact ? "impact" : ["push", "drift", "glitch"][index % 3],
+        sourcePath: clip.path,
+        sourceName: path.basename(clip.path),
+        sourceStart,
+        sourceDuration,
+        speed,
+        impactTime: impact.time,
+        motionScore: impact.motionScore
+      });
+    }
   });
   return {
     duration,
     segments,
-    cuts: boundaries.slice(1, -1),
+    cuts: uniqueTimes(segments.slice(1).map((segment) => segment.timelineStart)),
     detectedSceneCuts: cuts.length,
     detectedBeats: onsets.length
   };

@@ -17,6 +17,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("paths", nargs="+")
     parser.add_argument("--model", default="base")
+    parser.add_argument("--language", default=None)
+    parser.add_argument("--song", action="store_true")
     return parser.parse_args()
 
 
@@ -35,14 +37,19 @@ def clean_word(word: object) -> dict[str, object] | None:
     }
 
 
-def transcribe(model: WhisperModel, media_path: str) -> dict[str, object]:
+def transcribe(model: WhisperModel, media_path: str, language: str | None, song: bool) -> dict[str, object]:
     segments, info = model.transcribe(
         media_path,
         beam_size=5,
-        vad_filter=True,
+        vad_filter=not song,
         word_timestamps=True,
         condition_on_previous_text=False,
-        initial_prompt="Gaming montage. Minecraft PvP, End Crystal, Totem, kill, dead.",
+        language=language,
+        initial_prompt=(
+            "Lemon Demon, Fine. Sung English lyrics."
+            if song else
+            "Gaming montage. Minecraft PvP, End Crystal, Totem, kill, dead."
+        ),
     )
     output_segments: list[dict[str, object]] = []
     for segment in segments:
@@ -68,7 +75,7 @@ def transcribe(model: WhisperModel, media_path: str) -> dict[str, object]:
 def main() -> None:
     args = parse_args()
     model = WhisperModel(args.model, device="cpu", compute_type="int8")
-    result = [transcribe(model, media_path) for media_path in args.paths]
+    result = [transcribe(model, media_path, args.language, args.song) for media_path in args.paths]
     json.dump(result, sys.stdout, ensure_ascii=False)
 
 

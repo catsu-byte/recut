@@ -12,9 +12,12 @@ ReCut is a local-first desktop tool that turns pre-selected gaming highlights in
 - Audio-onset and peak detection
 - Game-agnostic motion and audio-impact scoring for source clips
 - One intentional macro shot per selected highlight, ending just after the detected impact
-- Local speech transcription with word timestamps
-- White bottom captions on a black background
-- Large animated keywords timed to gameplay impacts
+- Spectral music matching, resilient to bass boosts and game audio
+- Local song transcription with word timestamps
+- White lyric captions on a black background
+- Layered, colored kinetic keywords timed to gameplay impacts
+- Reference-cut subdivision, RGB split, flash, micro-shake, push and drift effects
+- Lanczos HD delivery, controlled sharpening and reduced saturation
 - 16:9 and 9:16 output
 - H.264 preview render with matched music and original clip audio
 - FCPXML timeline and JSON analysis report
@@ -25,13 +28,13 @@ ReCut is a local-first desktop tool that turns pre-selected gaming highlights in
 - Windows 10 or 11
 - DaVinci Resolve Free
 - Node.js 20 or newer when running from source
-- Python 3.10+ with `faster-whisper` for automatic captions in the current MVP
+- Python 3.10+ with `faster-whisper`, `numpy`, and `scipy` for music matching and lyric captions in the current MVP
 
 ## Run from source
 
 ```powershell
 npm install
-python -m pip install faster-whisper
+python -m pip install faster-whisper numpy scipy
 npm run dev
 ```
 
@@ -46,6 +49,8 @@ Choose one reference edit and one or more gaming clips. An optional music file c
 
 The generated `recut-preview.mp4` includes burned-in styled captions. `recut-captions.ass` is the editable subtitle sidecar. The imported timeline contains the individually rendered segments so the order and timing remain editable.
 
+Lyric text is transcribed from the selected local audio file; ReCut does not scrape copyrighted lyric sites. Review `recut-captions.ass` when exact published wording is required.
+
 ## Development
 
 ```powershell
@@ -58,7 +63,8 @@ npm run dist
 
 ## Roadmap
 
-- Bundle the speech engine and model downloader into the portable build
+- Bundle the audio-matching and speech engines into the portable build
+- Optional LRC/SRT import for exact user-supplied lyrics
 - Detect effect signatures from reference frames
 - Add RGB split, blur and configurable Fusion macros
 - Optional game profiles for Valorant and Minecraft
