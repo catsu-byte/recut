@@ -32,7 +32,7 @@ function createCaptionPlan(plan, transcripts) {
     groupWords(words).filter((caption) => caption.words.length > 1 || keywordText(caption.text).length >= 4),
     duration
   );
-  const keywords = plan.flatMap((segment) => {
+  const keywords = plan.filter(ownsImpact).flatMap((segment) => {
     const impact = displayImpactTime(segment);
     const candidates = words
       .filter((word) => word.segmentIndex === segment.index && Math.abs(midpoint(word) - impact) <= 1.35)
@@ -50,7 +50,7 @@ function createCaptionPlan(plan, transcripts) {
   return { words, captions, keywords };
 }
 
-function createLyricCaptionPlan(plan, transcript) {
+function createLyricCaptionPlan(plan, transcript, { keywords: withKeywords = true } = {}) {
   const words = (transcript?.segments || []).flatMap((segment) => segment.words || [])
     .map((word) => ({
       text: word.text,
@@ -64,7 +64,7 @@ function createLyricCaptionPlan(plan, transcript) {
     groupWords(words).filter((caption) => caption.words.length > 1 || keywordText(caption.text).length >= 4),
     duration
   );
-  const keywords = plan.flatMap((segment) => {
+  const keywords = !withKeywords ? [] : plan.filter(ownsImpact).flatMap((segment) => {
     const impact = clamp(
       displayImpactTime(segment),
       segment.timelineStart,
@@ -174,7 +174,15 @@ function captionEvents(caption) {
   });
 }
 
+// With planner output, only the shot that contains the visual hit gets the
+// keyword; hand-built plans without flash times keep one keyword per shot.
+function ownsImpact(segment) {
+  if (!Number.isFinite(segment.flashTime)) return true;
+  return segment.flashTime >= segment.timelineStart - 0.001 && segment.flashTime < segment.timelineStart + segment.duration;
+}
+
 function displayImpactTime(segment) {
+  if (Number.isFinite(segment.flashTime)) return segment.flashTime;
   return segment.timelineStart + (segment.impactTime - segment.sourceStart) / segment.speed - IMPACT_LEAD_SECONDS;
 }
 

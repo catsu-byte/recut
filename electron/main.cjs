@@ -2,8 +2,11 @@ const { app, BrowserWindow, dialog, ipcMain, shell, protocol, net } = require("e
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { inspectProject, renderProject, assertToolchain } = require("./core/pipeline.cjs");
-const { importMedalClip } = require("./core/medal.cjs");
+const { importMedalClips } = require("./core/medal.cjs");
 const { checkTranscriptionEngine } = require("./core/transcriber.cjs");
+const { readFontFamily, matchFontFromImage } = require("./core/fonts.cjs");
+const { parseEditInstructions } = require("./core/instructions.cjs");
+const { run } = require("./core/media.cjs");
 
 const VIDEO_FILTERS = [
   { name: "Video", extensions: ["mp4", "mov", "mkv", "webm", "avi", "m4v"] }
@@ -16,6 +19,12 @@ const LYRICS_FILTERS = [
 ];
 const FONT_FILTERS = [{ name: "Font", extensions: ["ttf", "otf"] }];
 const IMAGE_FILTERS = [{ name: "Overlay image", extensions: ["png", "webp", "jpg", "jpeg"] }];
+const SCREENSHOT_FILTERS = [{ name: "Image with text", extensions: ["png", "webp", "jpg", "jpeg", "bmp"] }];
+
+function bundledFontsDirectory() {
+  const root = path.resolve(__dirname, "..");
+  return path.join(root.includes("app.asar") ? root.replace("app.asar", "app.asar.unpacked") : root, "assets", "fonts");
+}
 
 let mainWindow;
 let activeRenderController = null;
@@ -80,6 +89,17 @@ app.whenReady().then(async () => {
   ipcMain.handle("pick-overlay", () =>
     pickFiles({ title: "Choose an overlay image", filters: IMAGE_FILTERS, properties: ["openFile"] })
   );
+  ipcMain.handle("pick-font-image", () =>
+    pickFiles({ title: "Choose an image that shows the font", filters: SCREENSHOT_FILTERS, properties: ["openFile"] })
+  );
+  ipcMain.handle("font-info", (_event, fontPath) => readFontFamily(fontPath));
+  ipcMain.handle("match-font", (_event, { imagePath, text }) =>
+    matchFontFromImage(imagePath, text, {
+      extraDirectories: [bundledFontsDirectory()],
+      onProgress: (payload) => mainWindow?.webContents.send("font-progress", payload)
+    })
+  );
+  ipcMain.handle("parse-instructions", (_event, text) => parseEditInstructions(text));
   ipcMain.handle("pick-clips", () =>
     pickFiles({ title: "Choose gaming clips", filters: VIDEO_FILTERS, properties: ["openFile", "multiSelections"] })
   );
@@ -90,12 +110,14 @@ app.whenReady().then(async () => {
     });
     return canceled ? [] : filePaths;
   });
-  ipcMain.handle("import-medal", (_event, url) =>
-    importMedalClip(url, path.join(app.getPath("userData"), "medal-imports"))
+  ipcMain.handle("import-medal", (_event, links) =>
+    importMedalClips(links, path.join(app.getPath("userData"), "medal-imports"),
+      (payload) => mainWindow?.webContents.send("medal-progress", payload))
   );
   ipcMain.handle("inspect-project", (_event, input) => inspectProject(input));
   ipcMain.handle("capabilities", async () => ({
     lyrics: await checkTranscriptionEngine(),
+    ytDlp: await run(process.env.RECUT_YTDLP || "yt-dlp", ["--version"]).then(() => true, () => false),
     ffmpeg: true,
     localOnly: true
   }));

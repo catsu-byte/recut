@@ -7,3 +7,4 @@ release/
 Thumbs.db
 recut-output/
 .test-media/
+__pycache__/

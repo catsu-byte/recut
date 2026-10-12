@@ -1,4 +1,5 @@
 const path = require("node:path");
+const { detectKeyMoments, detectImpact } = require("./keymoments.cjs");
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -117,81 +118,359 @@ function fallbackPick(pools, index) {
   return { clip, candidate: clip.candidates[index % clip.candidates.length] || { time: 0, score: 0 } };
 }
 
+// Seconds between the visual hit and the detected kill sound in the source
+// clip: the audible confirmation (death sound, totem pop) trails the hit that
+// caused it. The visual hit is what lands on the beat and gets the flash.
+const IMPACT_LEAD_SECONDS = 0.42;
+
+const STYLES = Object.freeze({
+  aggressive: {
+    base: 1.08, fastIn: { length: 0.4, speed: 1.4 }, slow: { length: 0.32, speed: 0.5 },
+    idealPost: 0.3, minPre: 0.5, maxFreeze: 0.45, pulse: 0.05,
+    fillers: ["push", "glitch", "shake"]
+  },
+  balanced: {
+    base: 1, fastIn: { length: 0.35, speed: 1.25 }, slow: { length: 0.36, speed: 0.6 },
+    idealPost: 0.42, minPre: 0.7, maxFreeze: 0.6, pulse: 0.035,
+    fillers: ["push", "drift", "glitch"]
+  },
+  cinematic: {
+    base: 0.94, fastIn: null, slow: { length: 0.62, speed: 0.55 },
+    idealPost: 0.75, minPre: 0.9, maxFreeze: 0.8, pulse: 0,
+    fillers: ["drift", "clean", "push"]
+  }
+});
+
+function styleProfile(preferences = {}) {
+  const style = STYLES[preferences.editingStyle] ? preferences.editingStyle : "balanced";
+  const profile = { ...STYLES[style], name: style };
+  if (preferences.speedRamps === false) { profile.fastIn = null; profile.slow = null; }
+  if (preferences.freezeFrames === false) profile.maxFreeze = 0;
+  if (preferences.effectIntensity === "low") profile.pulse = 0;
+  if (preferences.effectIntensity === "high") profile.pulse = Math.max(profile.pulse, 0.05) * 1.3;
+  if (preferences.impactPosition === "center") profile.idealPost = null;
+  return profile;
+}
+
 function createEventPlan({ duration, cuts, onsets, clips, preferences = {} }) {
   if (!clips.length) return { duration, segments: [], cuts: [], detectedSceneCuts: cuts.length, detectedBeats: onsets.length };
-  const macro = macroBoundaries(duration, cuts, clips.length);
+  const profile = styleProfile(preferences);
+  const prepared = clips.map((clip) => prepareClip(clip, preferences, profile));
+  const hits = assignHits(duration, cuts, onsets, prepared, profile, preferences);
+  const boundaries = chooseBoundaries(duration, hits, prepared, cuts, onsets, profile);
+  const strongBeats = onsets.filter((beat) => beat.strength >= 0.55).map((beat) => beat.time);
   const segments = [];
-  clips.forEach((clip, clipIndex) => {
-    const macroStart = macro[clipIndex];
-    const macroEnd = macro[clipIndex + 1];
-    const macroDuration = macroEnd - macroStart;
-    const overrideTime = Number(preferences.impactOverrides?.[clip.path]);
-    const impact = Number.isFinite(overrideTime)
-      ? { time: clamp(overrideTime, 0.05, Math.max(0.05, clip.duration - 0.05)), score: 1, motionScore: 1, type: "manual" }
-      : detectImpact(clip.duration, clip.onsets || [], clip.candidates || [], preferences);
-    const style = preferences.editingStyle || "balanced";
-    const postRoll = preferences.impactPosition === "end"
-      ? Math.min(0.1, macroDuration * 0.025)
-      : style === "aggressive" ? Math.min(0.32, Math.max(0.16, macroDuration * 0.065))
-        : style === "cinematic" ? Math.min(0.82, Math.max(0.42, macroDuration * 0.14))
-          : Math.min(0.55, Math.max(0.25, macroDuration * 0.1));
-    const speedFactor = style === "aggressive" ? 1.08 : style === "cinematic" ? 0.94 : 1;
-    const availableDuration = Math.min(clip.duration, macroDuration * speedFactor);
-    const speed = availableDuration / macroDuration;
-    const idealHitTime = preferences.impactPosition === "center"
-      ? macroStart + macroDuration * 0.5
-      : macroEnd - postRoll;
-    const hitTime = preferences.impactPosition === "end"
-      ? idealHitTime
-      : nearestRhythmHit(idealHitTime, macroStart, macroEnd, onsets, preferences.beatSync);
-    const macroSourceStart = clamp(
-      impact.time - (hitTime - macroStart) * speed,
-      0,
-      Math.max(0, clip.duration - availableDuration)
-    );
-    const mappedImpactTime = macroStart + (impact.time - macroSourceStart) / Math.max(speed, 0.00001);
+  prepared.forEach((clip, clipIndex) => {
+    const macroStart = boundaries[clipIndex];
+    const macroEnd = boundaries[clipIndex + 1];
+    const mapping = mapMacro(clip, macroStart, hits[clipIndex], macroEnd, profile);
+    const flashTime = mapping.anchorTimeline;
+    const accentTimes = clip.moments
+      .filter((moment) => Math.abs(moment.time - clip.impact.time) >= 0.25)
+      .map((moment) => mapping.toTimeline(Math.max(0, moment.time - clip.lead)))
+      .filter((time) => Number.isFinite(time) && time > macroStart + 0.05 && time < macroEnd - 0.05);
     const internalCuts = cuts.filter((time) => time > macroStart + 0.28 && time < macroEnd - 0.28);
-    const shotBoundaries = uniqueTimes([macroStart, ...internalCuts, macroEnd], 0.24);
+    const shotBoundaries = uniqueTimes([macroStart, ...internalCuts, ...mapping.rampPoints, macroEnd], 0.14)
+      .filter((time) => time >= macroStart && time <= macroEnd);
+    if (shotBoundaries.at(-1) < macroEnd - 0.001) shotBoundaries.push(macroEnd);
+    if (shotBoundaries.length > 2 && macroEnd - shotBoundaries.at(-2) < 0.14) shotBoundaries.splice(-2, 1);
     for (let shotIndex = 0; shotIndex < shotBoundaries.length - 1; shotIndex += 1) {
       const timelineStart = shotBoundaries[shotIndex];
-      const segmentDuration = shotBoundaries[shotIndex + 1] - timelineStart;
-      const sourceStart = macroSourceStart + (timelineStart - macroStart) * speed;
-      const sourceDuration = segmentDuration * speed;
-      const sourceEnd = sourceStart + sourceDuration;
-      const containsImpact = impact.time >= sourceStart - 0.08 && impact.time <= sourceEnd + 0.08;
+      const timelineEnd = shotBoundaries[shotIndex + 1];
+      const segmentDuration = timelineEnd - timelineStart;
+      const source = mapping.sourceRange(timelineStart, timelineEnd);
       const index = segments.length;
-      const fillerEffects = style === "aggressive"
-        ? ["push", "glitch", "shake"]
-        : style === "cinematic" ? ["drift", "clean", "push"] : ["push", "drift", "glitch"];
+      const flashAt = flashTime - timelineStart;
+      const touchesImpact = flashAt > -0.2 && flashAt < segmentDuration + 0.64;
+      const accents = accentTimes.map((time) => time - timelineStart).filter((time) => time >= 0 && time < segmentDuration);
+      const pulses = profile.pulse && !touchesImpact
+        ? strongBeats.map((time) => time - timelineStart).filter((time) => time > 0.04 && time < segmentDuration - 0.04)
+        : [];
+      const impactScore = clip.impact.score || 0;
       segments.push({
         index,
         clipIndex,
         timelineStart,
         duration: segmentDuration,
-        intensity: containsImpact ? impact.score : Math.max(0.3, impact.score * 0.62),
-        effect: containsImpact ? "impact" : fillerEffects[index % fillerEffects.length],
-        editingStyle: style,
+        intensity: touchesImpact ? impactScore : Math.max(0.3, impactScore * 0.62),
+        effect: touchesImpact ? "impact" : profile.fillers[index % profile.fillers.length],
+        editingStyle: profile.name,
         sourcePath: clip.path,
         sourceName: path.basename(clip.path),
         fromMedal: Boolean(clip.fromMedal),
         hasAudio: clip.hasAudio !== false,
-        sourceStart,
-        sourceDuration,
-        speed,
-        impactTime: impact.time,
-        hitTargetTime: hitTime,
-        hitSyncError: Math.abs(mappedImpactTime - hitTime),
-        keyMomentType: impact.type,
-        motionScore: impact.motionScore
+        sourceStart: source.start,
+        sourceDuration: source.duration,
+        speed: source.speed,
+        freeze: source.freeze,
+        flashAt: touchesImpact ? flashAt : null,
+        flashTime,
+        accents,
+        pulses,
+        pulseAmount: profile.pulse,
+        whipIn: shotIndex === 0 && clipIndex > 0 && preferences.transitions !== false,
+        impactTime: clip.impact.time,
+        anchorTime: clip.anchor,
+        hitTargetTime: hits[clipIndex],
+        hitSyncError: Math.abs(mapping.anchorTimeline - hits[clipIndex]),
+        keyMomentType: clip.impact.type,
+        keyMoments: clip.moments.map((moment) => ({ time: moment.time, type: moment.type, score: moment.score })),
+        motionScore: clip.impact.motionScore
       });
     }
   });
   return {
     duration,
     segments,
+    hits,
+    boundaries,
     cuts: uniqueTimes(segments.slice(1).map((segment) => segment.timelineStart)),
     detectedSceneCuts: cuts.length,
     detectedBeats: onsets.length
+  };
+}
+
+function prepareClip(clip, preferences, profile) {
+  const overrideTime = Number(preferences.impactOverrides?.[clip.path]);
+  let impact;
+  let moments;
+  if (Number.isFinite(overrideTime)) {
+    impact = { time: clamp(overrideTime, 0.05, Math.max(0.05, clip.duration - 0.05)), score: 1, motionScore: 1, type: "manual" };
+    moments = [impact];
+  } else {
+    const detected = detectKeyMoments(clip, preferences);
+    impact = detected.primary;
+    moments = detected.moments;
+  }
+  // Manual markers are placed on the frame the user sees, automatic ones on the
+  // kill sound, which trails the visual hit.
+  const lead = impact.type === "manual" ? 0 : Math.max(0, Number(preferences.impactLead ?? IMPACT_LEAD_SECONDS));
+  const anchor = clamp(impact.time - lead, 0.05, Math.max(0.05, clip.duration - 0.05));
+  const firstInCluster = Math.min(...moments.filter((item) => item.time <= impact.time && impact.time - item.time <= 2.6).map((item) => item.time - lead), anchor);
+  const slowSource = profile.slow ? profile.slow.length * profile.slow.speed : 0;
+  const postSource = Math.max(0, clip.duration - anchor);
+  // How much timeline the source can fill before/after the hit without
+  // misaligning it: slower playback (≥0.9× of the style speed before the hit,
+  // slow motion and a short freeze after it) stretches what is available.
+  const preCapacity = anchor / (profile.base * 0.9);
+  const postCapacity = (postSource >= slowSource && profile.slow
+    ? profile.slow.length + (postSource - slowSource) / (profile.base * 0.6)
+    : postSource / Math.min(0.6, profile.slow?.speed || 0.6)) + profile.maxFreeze;
+  const clusterPre = (anchor - Math.max(0, firstInCluster)) / profile.base + 0.35;
+  // Keep the slot open until the kill sound itself has played.
+  const slowSourceLength = profile.slow ? profile.slow.length * profile.slow.speed : 0;
+  const leadTimeline = profile.slow && lead > slowSourceLength
+    ? profile.slow.length + (lead - slowSourceLength) / profile.base
+    : profile.slow ? lead / profile.slow.speed : lead / profile.base;
+  const idealPost = profile.idealPost === null ? null : Math.max(profile.idealPost, leadTimeline + 0.12);
+  return {
+    ...clip,
+    impact,
+    moments,
+    lead,
+    anchor,
+    idealPost,
+    preCapacity,
+    postCapacity,
+    minPre: Math.min(Math.max(profile.minPre, clusterPre), Math.max(profile.minPre, preCapacity))
+  };
+}
+
+// Choose one music hit per clip (in order) with dynamic programming. Strong
+// onsets that coincide with a reference cut are the best landing spots; every
+// clip must have enough footage before and after its kill to fill its slot.
+function assignHits(duration, cuts, onsets, clips, profile, preferences) {
+  const count = clips.length;
+  const strict = preferences.beatSync === "strict";
+  const candidates = hitCandidates(duration, cuts, onsets, profile);
+  const slot = duration / count;
+  const idealPost = (clip) => clip.idealPost ?? slot * 0.5;
+  const prePenalty = (clip, pre) => Math.max(0, clip.minPre - pre) * 3 + Math.max(0, pre - clip.preCapacity) * 2.2;
+  const postPenalty = (clip, post) => Math.max(0, 0.08 - post) * 8 + Math.max(0, post - clip.postCapacity) * 2.2;
+  const qualityWeight = strict ? 1.4 : 0.8;
+  const evenWeight = strict ? 0.08 : 0.16;
+  const M = candidates.length;
+  const score = Array.from({ length: count }, () => new Float64Array(M).fill(-Infinity));
+  const parent = Array.from({ length: count }, () => new Int32Array(M).fill(-1));
+
+  for (let k = 0; k < M; k += 1) {
+    const h = candidates[k].time;
+    const clip = clips[0];
+    let value = candidates[k].quality * qualityWeight - prePenalty(clip, h)
+      - Math.abs(h - (slot - idealPost(clip))) * evenWeight;
+    if (count === 1) value -= postPenalty(clip, duration - h) + Math.abs(duration - h - idealPost(clip)) * 0.35;
+    score[0][k] = value;
+  }
+  for (let i = 1; i < count; i += 1) {
+    const clip = clips[i];
+    const previous = clips[i - 1];
+    const target = slot * (i + 1) - idealPost(clip);
+    for (let k = 0; k < M; k += 1) {
+      const h = candidates[k].time;
+      let best = -Infinity;
+      let bestParent = -1;
+      for (let j = 0; j < k; j += 1) {
+        if (score[i - 1][j] === -Infinity) continue;
+        const previousHit = candidates[j].time;
+        const gap = h - previousHit;
+        if (gap < 0.3) continue;
+        const boundary = clamp(previousHit + idealPost(previous), previousHit + 0.08, h - Math.min(clip.minPre, gap * 0.6));
+        const value = score[i - 1][j]
+          - postPenalty(previous, boundary - previousHit)
+          - prePenalty(clip, h - boundary);
+        if (value > best) { best = value; bestParent = j; }
+      }
+      if (bestParent < 0) continue;
+      let value = best + candidates[k].quality * qualityWeight - Math.abs(h - target) * evenWeight;
+      if (i === count - 1) value -= postPenalty(clip, duration - h) + Math.abs(duration - h - idealPost(clip)) * 0.35;
+      score[i][k] = value;
+      parent[i][k] = bestParent;
+    }
+  }
+  let end = -1;
+  for (let k = 0; k < M; k += 1) if (end < 0 || score[count - 1][k] > score[count - 1][end]) end = k;
+  if (end < 0 || score[count - 1][end] === -Infinity) {
+    // Not enough candidate hits for every clip: fall back to evenly spaced slots.
+    const macro = macroBoundaries(duration, cuts, count);
+    return clips.map((clip, index) => clamp(macro[index + 1] - idealPost(clip), macro[index] + 0.3, macro[index + 1] - 0.05));
+  }
+  const result = new Array(count);
+  for (let i = count - 1, k = end; i >= 0; i -= 1) {
+    result[i] = candidates[k].time;
+    k = parent[i][k];
+  }
+  return result;
+}
+
+function hitCandidates(duration, cuts, onsets, profile) {
+  const fromBeats = onsets
+    .filter((beat) => beat.time > 0.3 && beat.time < duration - 0.05)
+    .map((beat) => {
+      const nearCut = cuts.some((cut) => Math.abs(cut - beat.time) <= 0.12 || (cut - beat.time > 0 && cut - beat.time <= (profile.idealPost ?? 0.5) + 0.15));
+      return { time: beat.time, quality: (beat.strength || 0) + (nearCut ? 0.25 : 0) };
+    });
+  // A coarse grid keeps the plan solvable when the music has few onsets.
+  const grid = [];
+  for (let time = 0.5; time < duration - 0.05; time += 0.25) {
+    if (fromBeats.every((beat) => Math.abs(beat.time - time) > 0.12)) grid.push({ time, quality: -0.15 });
+  }
+  return [...fromBeats, ...grid].sort((a, b) => a.time - b.time);
+}
+
+function chooseBoundaries(duration, hits, clips, cuts, onsets, profile) {
+  const boundaries = [0];
+  for (let i = 0; i < clips.length - 1; i += 1) {
+    const hit = hits[i];
+    const nextHit = hits[i + 1];
+    const clip = clips[i];
+    const next = clips[i + 1];
+    const ideal = hit + (clip.idealPost ?? (nextHit - hit) * 0.5);
+    const hardLow = hit + 0.08;
+    const hardHigh = Math.max(hardLow, nextHit - Math.min(0.3, (nextHit - hit) * 0.5));
+    const low = Math.max(hardLow, nextHit - next.preCapacity);
+    const high = Math.min(hardHigh, nextHit - Math.min(next.minPre, (nextHit - hit) * 0.6), hit + clip.postCapacity);
+    let boundary = low <= high ? clamp(ideal, low, high) : clamp((low + high) / 2, hardLow, hardHigh);
+    // Snap to a reference transition or a beat when one is close.
+    const snapLow = low <= high ? low : hardLow;
+    const snapHigh = low <= high ? high : hardHigh;
+    const snap = [...cuts.map((time) => ({ time, radius: 0.2 })), ...onsets.map((beat) => ({ time: beat.time, radius: 0.1 }))]
+      .filter((item) => Math.abs(item.time - boundary) <= item.radius && item.time >= snapLow && item.time <= snapHigh)
+      .sort((a, b) => Math.abs(a.time - boundary) - Math.abs(b.time - boundary))[0];
+    if (snap) boundary = snap.time;
+    boundaries.push(clamp(boundary, Math.max(boundaries.at(-1) + 0.3, hardLow), hardHigh));
+  }
+  boundaries.push(duration);
+  return boundaries;
+}
+
+// Builds a piecewise-linear timeline→source mapping for one clip slot:
+// natural speed → quick speed-up into the kill → slow motion after it →
+// natural speed, with a frozen final frame when the clip ends too early.
+function mapMacro(clip, start, hit, end, profile) {
+  const pieces = [];
+  const base = profile.base;
+  const preLength = Math.max(0, hit - start);
+  const fastLength = profile.fastIn ? Math.min(profile.fastIn.length, preLength * 0.45) : 0;
+  const prePieces = [
+    { length: preLength - fastLength, speed: base },
+    { length: fastLength, speed: profile.fastIn?.speed || base }
+  ].filter((piece) => piece.length > 0.0005);
+  let preSource = prePieces.reduce((sum, piece) => sum + piece.length * piece.speed, 0);
+  if (preSource > clip.anchor && preSource > 0) {
+    const factor = Math.max(0.9, clip.anchor / preSource);
+    prePieces.forEach((piece) => { piece.speed *= factor; });
+    preSource = prePieces.reduce((sum, piece) => sum + piece.length * piece.speed, 0);
+  }
+  const sourceStart = Math.max(0, clip.anchor - preSource);
+
+  const postLength = Math.max(0, end - hit);
+  const slowLength = profile.slow ? Math.min(profile.slow.length, postLength) : 0;
+  const postPieces = [
+    { length: slowLength, speed: profile.slow?.speed || base },
+    { length: postLength - slowLength, speed: base }
+  ].filter((piece) => piece.length > 0.0005);
+  const sourceAtHit = sourceStart + preSource;
+  const remaining = Math.max(0, clip.duration - 0.04 - sourceAtHit);
+  const postSource = postPieces.reduce((sum, piece) => sum + piece.length * piece.speed, 0);
+  if (postSource > remaining && postSource > 0) {
+    const factor = Math.max(0.6, remaining / postSource);
+    postPieces.forEach((piece) => { piece.speed = Math.max(0.5, piece.speed * factor); });
+  }
+  let time = start;
+  let source = sourceStart;
+  const rampPoints = [];
+  for (const piece of [...prePieces, ...postPieces]) {
+    pieces.push({ start: time, end: time + piece.length, source, speed: piece.speed });
+    time += piece.length;
+    source += piece.length * piece.speed;
+    rampPoints.push(time);
+  }
+  rampPoints.pop();
+  const sourceLimit = Math.max(0.05, clip.duration - 0.04);
+
+  const toSource = (t) => {
+    const piece = pieces.find((item) => t <= item.end + 1e-9) || pieces.at(-1);
+    if (!piece) return sourceStart;
+    return piece.source + (clamp(t, piece.start, piece.end) - piece.start) * piece.speed;
+  };
+  const toTimeline = (s) => {
+    for (const piece of pieces) {
+      const pieceEnd = piece.source + (piece.end - piece.start) * piece.speed;
+      if (s >= piece.source - 1e-9 && s <= pieceEnd + 1e-9) return piece.start + (s - piece.source) / piece.speed;
+    }
+    return NaN;
+  };
+  const sourceRange = (from, to) => {
+    const length = to - from;
+    let startSource = toSource(from);
+    let endSource = toSource(to);
+    let freeze = 0;
+    if (endSource > sourceLimit) {
+      const reachesLimit = toTimeline(sourceLimit);
+      freeze = Number.isFinite(reachesLimit) ? clamp(to - Math.max(from, reachesLimit), 0, length) : length;
+      endSource = sourceLimit;
+    }
+    // A slot that is entirely frozen still needs a few real frames to clone.
+    if (endSource - startSource < 0.06) {
+      startSource = Math.max(0, sourceLimit - 0.12);
+      endSource = sourceLimit;
+      freeze = Math.max(0, length - 0.12);
+    }
+    const moving = Math.max(0.02, length - freeze);
+    return {
+      start: startSource,
+      duration: endSource - startSource,
+      speed: clamp((endSource - startSource) / moving, 0.5, 2.5),
+      freeze
+    };
+  };
+  const anchorTimeline = toTimeline(clip.anchor);
+  return {
+    toSource,
+    toTimeline,
+    sourceRange,
+    rampPoints: rampPoints.filter((point) => point > start + 0.1 && point < end - 0.1),
+    anchorTimeline: Number.isFinite(anchorTimeline) ? anchorTimeline : hit
   };
 }
 
@@ -224,43 +503,7 @@ function nearestRhythmHit(ideal, start, end, onsets, mode = "balanced") {
   return candidates[0]?.time ?? ideal;
 }
 
-function detectImpact(duration, onsets, motionCandidates, preferences = {}) {
-  const motionMaximum = Math.max(...motionCandidates.map((item) => item.score), 0.00001);
-  const candidates = onsets
-    // The final inventory/pickup sound is often the loudest event in a gaming
-    // clip, but it happens after the elimination. Keep a short post-roll out of
-    // the search so effects land on the fight instead of the loot collection.
-    .filter((item) => item.time >= duration * 0.18 && item.time <= Math.min(duration - 0.12, duration * 0.92))
-    .map((onset) => {
-      const nearestMotion = motionCandidates.reduce((best, motion) => {
-        const distance = Math.abs(motion.time - onset.time);
-        return distance < best.distance ? { distance, score: motion.score } : best;
-      }, { distance: Infinity, score: 0 });
-      const motionScore = (nearestMotion.score / motionMaximum) * Math.max(0, 1 - nearestMotion.distance / 1.1);
-      const lateBias = onset.time / duration;
-      const pairedOnset = preferences.detectDoubleTaps === false ? null : onsets.find((other) => {
-        const gap = Math.abs(other.time - onset.time);
-        return other !== onset && gap >= 0.075 && gap <= 0.46 && other.strength >= 0.28;
-      });
-      const doubleTapScore = pairedOnset
-        ? Math.min(onset.strength, pairedOnset.strength) * Math.max(0, 1 - Math.abs(Math.abs(pairedOnset.time - onset.time) - 0.22) / 0.3)
-        : 0;
-      return {
-        time: onset.time,
-        score: onset.strength * 0.52 + motionScore * 0.25 + lateBias * 0.08 + doubleTapScore * 0.15,
-        motionScore,
-        doubleTapScore,
-        type: doubleTapScore >= 0.18 ? "double-tap" : "impact"
-      };
-    });
-  if (!candidates.length) {
-    const fallback = [...motionCandidates].sort((a, b) => b.score - a.score)[0];
-    return { time: fallback?.time || duration * 0.8, score: fallback?.score || 0, motionScore: fallback?.score || 0, type: "motion" };
-  }
-  return candidates.sort((a, b) => b.score - a.score)[0];
-}
-
 module.exports = {
-  clamp, createBlueprint, assignClips, chooseEffect,
-  createEventPlan, macroBoundaries, detectImpact, nearestRhythmHit
+  clamp, createBlueprint, assignClips, chooseEffect, styleProfile, IMPACT_LEAD_SECONDS,
+  createEventPlan, macroBoundaries, detectImpact, detectKeyMoments, nearestRhythmHit
 };

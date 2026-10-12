@@ -1,12 +1,13 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
-const { run, probe, sceneCuts, audioOnsets, findAudioOffset, motionWindows, thumbnailDataUrl, FFMPEG, FFPROBE } = require("./media.cjs");
-const { clamp, createEventPlan, detectImpact } = require("./planner.cjs");
+const { run, probe, sceneCuts, audioOnsets, findAudioOffset, motionProfile, thumbnailDataUrl, FFMPEG, FFPROBE } = require("./media.cjs");
+const { clamp, createEventPlan, detectKeyMoments, IMPACT_LEAD_SECONDS } = require("./planner.cjs");
+const { detectWatermark, delogoFilter } = require("./watermark.cjs");
 const { createFcpxml, createReport } = require("./exporters.cjs");
 const { transcribeMusicSection, matchMusicSection } = require("./transcriber.cjs");
 const { createLyricCaptionPlan, createAss } = require("./captions.cjs");
-const { loadTimedLyrics } = require("./lyrics.cjs");
+const { loadTimedLyrics, timedLyricsFromText, looksTimed } = require("./lyrics.cjs");
 const { parseEditInstructions } = require("./instructions.cjs");
 
 const analysisCache = new Map();
@@ -33,22 +34,32 @@ async function inspectProject(input) {
   const instructions = parseEditInstructions(input.instructions);
   const scanned = recallAnalysis(input) || await scanProject(input);
   const preferences = planningPreferences(input, instructions);
+  await attachWatermarks(scanned, input, preferences);
   const blueprint = createEventPlan({ ...scanned, preferences });
   const analysisId = rememberAnalysis(input, scanned);
   const clipInsights = await Promise.all(scanned.clips.map(async (clip) => {
     const override = Number(preferences.impactOverrides?.[clip.path]);
+    const detected = detectKeyMoments(clip, preferences);
+    const lead = Number(preferences.impactLead ?? IMPACT_LEAD_SECONDS);
+    const visual = (time) => clamp(time - lead, 0.05, Math.max(0.05, clip.duration - 0.05));
+    const autoTime = visual(detected.primary.time);
     const impact = Number.isFinite(override)
       ? { time: override, score: 1, type: "manual" }
-      : detectImpact(clip.duration, clip.onsets, clip.candidates, preferences);
+      : { ...detected.primary, time: autoTime };
     let thumbnail = null;
     try { thumbnail = await thumbnailDataUrl(clip.path, impact.time); } catch { /* review still works without thumbnails */ }
     return {
       path: clip.path,
       name: path.basename(clip.path),
       duration: clip.duration,
+      width: clip.width,
+      height: clip.height,
       impactTime: impact.time,
+      autoImpactTime: autoTime,
       impactScore: impact.score,
       keyMomentType: impact.type,
+      keyMoments: detected.moments.map((moment) => ({ time: visual(moment.time), type: moment.type, score: moment.score })),
+      watermark: clip.watermark || null,
       fromMedal: clip.fromMedal,
       thumbnail
     };
@@ -78,10 +89,14 @@ async function renderProject(input, progress = () => {}, signal = null) {
   throwIfAborted(signal);
   const { reference, targetDuration, audioMatch, cuts, onsets, clips } = scanned;
   const preferences = planningPreferences(input, instructions);
+  await attachWatermarks(scanned, input, preferences);
   const blueprint = createEventPlan({ duration: targetDuration, cuts, onsets, clips, preferences });
+  const watermarks = new Map(clips.map((clip) => [clip.path, clip.watermark]));
   const plan = blueprint.segments.map((segment) => ({
     ...segment,
-    removeMedalWatermark: segment.fromMedal && (input.removeMedalWatermark || instructions.preferences.removeMedalWatermark)
+    removeMedalWatermark: preferences.removeMedalWatermark && (segment.fromMedal || preferences.watermarkScope === "all"),
+    watermarkBox: watermarks.get(segment.sourcePath) || null,
+    watermarkMode: preferences.watermarkMode
   }));
   const { width, height, fps } = outputProfile(clips, input.aspectRatio, input.renderQuality);
   const encoding = encodingProfile(input.renderQuality);
@@ -92,14 +107,24 @@ async function renderProject(input, progress = () => {}, signal = null) {
 
   const audioPath = input.musicPath || input.referencePath;
   progress({ stage: "captions", percent: 39, message: "Transcribing the matched song section for lyric captions" });
-  const transcription = input.lyricsPath
-    ? {
-        status: "provided",
-        model: "timed lyrics",
-        transcript: await loadTimedLyrics(input.lyricsPath, targetDuration, audioMatch.offset)
-      }
-    : await transcribeMusicSection(audioPath, audioMatch.offset, targetDuration, projectDirectory);
-  const captionPlan = createLyricCaptionPlan(plan, transcription.transcript);
+  const lyricsText = String(input.lyricsText || "").trim();
+  const transcription = preferences.lyrics === false && preferences.impactWords === false
+    ? { status: "disabled", model: null, transcript: null }
+    : input.lyricsPath
+      ? {
+          status: "provided",
+          model: "timed lyrics",
+          transcript: await loadTimedLyrics(input.lyricsPath, targetDuration, audioMatch.offset)
+        }
+      : lyricsText && looksTimed(lyricsText)
+        ? { status: "provided", model: "timed lyrics", transcript: timedLyricsFromText(lyricsText, targetDuration, audioMatch.offset) }
+        : await transcribeMusicSection(audioPath, audioMatch.offset, targetDuration, projectDirectory, {
+            plainLyrics: lyricsText,
+            quality: input.lyricsQuality,
+            language: input.lyricsLanguage
+          });
+  const captionPlan = createLyricCaptionPlan(plan, transcription.transcript, { keywords: preferences.impactWords !== false });
+  if (preferences.lyrics === false) captionPlan.captions = [];
   const captionsPath = path.join(projectDirectory, "recut-captions.ass");
   const customFontName = input.fontName?.trim();
   await fs.writeFile(captionsPath, createAss(captionPlan, {
@@ -162,7 +187,8 @@ async function renderProject(input, progress = () => {}, signal = null) {
       captions: {
         status: transcription.status,
         model: transcription.model,
-        source: input.lyricsPath ? "provided timed lyrics" : "matched music section",
+        source: input.lyricsPath ? "provided timed lyrics" : lyricsText ? "pasted lyrics" : "matched music section",
+        vocalsSeparated: Boolean(transcription.vocalsSeparated),
         error: transcription.error || null,
         phrases: captionPlan.captions.length,
         keywords: captionPlan.keywords.length,
@@ -184,7 +210,10 @@ async function renderProject(input, progress = () => {}, signal = null) {
     timelinePath,
     reportPath,
     captionsPath,
-    captions: { status: transcription.status, phrases: captionPlan.captions.length, keywords: captionPlan.keywords.length },
+    captions: {
+      status: transcription.status, phrases: captionPlan.captions.length, keywords: captionPlan.keywords.length,
+      vocalsSeparated: Boolean(transcription.vocalsSeparated), error: transcription.error || null
+    },
     musicOffset: audioMatch.offset,
     musicMatchConfidence: audioMatch.confidence,
     musicMatchMethod: audioMatch.method,
@@ -206,26 +235,47 @@ async function scanProject(input, progress = () => {}) {
     audioOnsets(input.musicPath || input.referencePath, targetDuration, audioMatch.offset),
     Promise.all(input.clipPaths.map(async (clipPath, index) => {
       const info = await probe(clipPath);
-      const [candidates, clipOnsets] = await Promise.all([
-        motionWindows(clipPath, info.duration), info.hasAudio ? audioOnsets(clipPath, info.duration) : Promise.resolve([])
+      const [motion, clipOnsets, hfOnsets] = await Promise.all([
+        motionProfile(clipPath, info.duration),
+        info.hasAudio ? audioOnsets(clipPath, info.duration) : Promise.resolve([]),
+        info.hasAudio ? audioOnsets(clipPath, info.duration, 0, { highpass: 2200 }) : Promise.resolve([])
       ]);
       progress({
         stage: "clips", percent: 18 + Math.round(((index + 1) / input.clipPaths.length) * 20),
         message: `Scanned clip ${index + 1} of ${input.clipPaths.length}`
       });
-      return { ...info, candidates, onsets: clipOnsets, fromMedal: input.medalClipPaths?.includes(clipPath) };
+      return {
+        ...info, candidates: motion.candidates, motionCurve: motion.curve, onsets: clipOnsets, hfOnsets,
+        fromMedal: input.medalClipPaths?.includes(clipPath)
+      };
     }))
   ]);
   return { reference, targetDuration, duration: targetDuration, audioMatch, cuts, onsets, clips };
 }
 
 function planningPreferences(input, instructions) {
+  const fromText = instructions.preferences;
   return {
-    ...instructions.preferences,
-    beatSync: input.editingStyle === "aggressive" ? "strict" : instructions.preferences.beatSync,
-    editingStyle: ["balanced", "aggressive", "cinematic"].includes(input.editingStyle) ? input.editingStyle : "balanced",
+    ...fromText,
+    beatSync: input.editingStyle === "aggressive" || input.beatSync === "strict" ? "strict" : fromText.beatSync,
+    editingStyle: ["balanced", "aggressive", "cinematic"].includes(fromText.editingStyle)
+      ? fromText.editingStyle
+      : ["balanced", "aggressive", "cinematic"].includes(input.editingStyle) ? input.editingStyle : "balanced",
+    removeMedalWatermark: Boolean(input.removeMedalWatermark || fromText.removeMedalWatermark),
+    watermarkScope: fromText.watermarkScope === "all" || input.watermarkScope === "all" ? "all" : "medal",
+    watermarkMode: input.watermarkMode === "crop" ? "crop" : "auto",
     impactOverrides: input.impactOverrides || {}
   };
+}
+
+// Watermark detection needs a full decode pass, so it only runs for clips that
+// will actually be cleaned and the result is kept with the cached analysis.
+async function attachWatermarks(scanned, input, preferences) {
+  if (!preferences.removeMedalWatermark) return;
+  await Promise.all(scanned.clips.map(async (clip) => {
+    if (!(clip.fromMedal || preferences.watermarkScope === "all") || clip.watermark !== undefined) return;
+    try { clip.watermark = await detectWatermark(clip.path, clip); } catch { clip.watermark = null; }
+  }));
 }
 
 function analysisSignature(input) {
@@ -252,7 +302,8 @@ function publicSegment(segment) {
     index: segment.index, clipIndex: segment.clipIndex, timelineStart: segment.timelineStart,
     duration: segment.duration, sourceName: segment.sourceName, sourceStart: segment.sourceStart,
     impactTime: segment.impactTime, hitTargetTime: segment.hitTargetTime, hitSyncError: segment.hitSyncError,
-    effect: segment.effect, keyMomentType: segment.keyMomentType
+    effect: segment.effect, keyMomentType: segment.keyMomentType, speed: segment.speed, freeze: segment.freeze,
+    flashTime: segment.flashTime
   };
 }
 
@@ -296,72 +347,136 @@ async function matchAudio(referencePath, musicPath, duration) {
 }
 
 async function renderSegment(segment, outputPath, { width, height, fps, encoding = encodingProfile(), signal = null }) {
-  const watermarkCrop = segment.removeMedalWatermark
-    ? "crop=trunc(iw*0.94/2)*2:trunc(ih*0.92/2)*2:(iw-ow)/2:(ih-oh)/2,"
-    : "";
-  const base = `${watermarkCrop}scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height}`;
+  const watermark = watermarkFilter(segment);
+  const base = `${watermark}scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height}`;
   const filters = effectFilters(segment, base, width, height, segment.duration);
+  const speed = clamp(segment.speed || 1, 0.5, 2.5);
+  const audioFilters = [`atempo=${speed.toFixed(5)}`, ...gameAudioFilters(segment)];
+  if (segment.freeze > 0) audioFilters.push("apad");
   const args = [
     "-hide_banner", "-loglevel", "error", "-y",
-    "-ss", segment.sourceStart.toFixed(3), "-t", segment.sourceDuration.toFixed(3),
+    "-ss", segment.sourceStart.toFixed(3), "-t", Math.max(0.04, segment.sourceDuration).toFixed(3),
     "-i", segment.sourcePath
   ];
   if (!segment.hasAudio) args.push("-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
   args.push(
     "-vf", `${filters},fps=${fps},format=yuv420p`,
-    "-af", `atempo=${segment.speed.toFixed(5)}`,
+    "-af", audioFilters.join(","),
     "-map", "0:v:0", "-map", segment.hasAudio ? "0:a:0" : "1:a:0",
     "-c:v", "libx264", "-preset", encoding.preset, "-crf", String(encoding.crf),
-    "-c:a", "aac", "-b:a", encoding.audioBitrate, "-ac", "2",
+    "-c:a", "aac", "-b:a", encoding.audioBitrate, "-ac", "2", "-ar", "48000",
     "-t", segment.duration.toFixed(3), outputPath
   );
   await run(FFMPEG, args, { signal });
 }
 
+function watermarkFilter(segment) {
+  if (!segment.removeMedalWatermark) return "";
+  const box = segment.watermarkBox;
+  if (box && segment.watermarkMode !== "crop") return delogoFilter(box);
+  return "crop=trunc(iw*0.94/2)*2:trunc(ih*0.92/2)*2:(iw-ow)/2:(ih-oh)/2,";
+}
+
+// Boosts the game audio around the kill so the confirmation sound punches
+// through the music, and ducks it slightly everywhere else.
+function gameAudioFilters(segment) {
+  const windows = [];
+  if (Number.isFinite(segment.flashAt)) windows.push([segment.flashAt - 0.05, segment.flashAt + 0.95]);
+  for (const accent of segment.accents || []) windows.push([accent - 0.04, accent + 0.4]);
+  const visible = windows.filter(([from, to]) => to > 0 && from < segment.duration);
+  if (!visible.length) return ["volume=0.85"];
+  const condition = visible.map(([from, to]) => `between(t,${from.toFixed(3)},${to.toFixed(3)})`).join("+");
+  return [`volume='if(gt(${condition},0),1.45,0.85)':eval=frame`];
+}
+
+function num(value) {
+  return Number(value).toFixed(3);
+}
+
 function effectFilters(effectOrSegment, base, width, height, duration) {
   const segment = typeof effectOrSegment === "string"
-    ? { effect: effectOrSegment, sourceStart: 0, impactTime: 0.18, speed: 1 }
+    ? { effect: effectOrSegment, flashAt: effectOrSegment === "impact" ? Math.min(0.18, duration * 0.5) : null, speed: 1 }
     : effectOrSegment;
   const effect = segment.effect;
-  const speed = `setpts=PTS/${Math.max(segment.speed || 1, 0.01)}`;
-  const detectedImpact = (segment.impactTime - segment.sourceStart) / Math.max(segment.speed || 1, 0.01);
-  const impact = clamp(detectedImpact - 0.42, 0.08, Math.max(0.09, duration - 0.08));
-  const hitStart = Math.max(0, impact - 0.055).toFixed(3);
-  const hitEnd = Math.min(duration, impact + 0.16).toFixed(3);
-  const preStart = Math.max(0, impact - 0.62).toFixed(3);
-  const dipTime = Math.max(0.02, impact - 0.13).toFixed(3);
-  const recoverTime = Math.max(0.04, impact).toFixed(3);
-  const grade = segment.editingStyle === "aggressive"
+  const chain = [base, `setpts=PTS/${Math.max(segment.speed || 1, 0.01)}`];
+  const freeze = Math.max(0, Number(segment.freeze) || 0);
+  if (freeze > 0.01) chain.push(`tpad=stop_mode=clone:stop_duration=${num(freeze + 0.1)}`);
+  chain.push(segment.editingStyle === "aggressive"
     ? "hqdn3d=0.55:0.55:2.2:2.2,unsharp=5:5:1.35:3:3:0.35,eq=saturation=0.88:contrast=1.09:gamma=0.97,vignette=PI/6.2"
     : segment.editingStyle === "cinematic"
       ? "hqdn3d=0.9:0.9:3.2:3.2,unsharp=5:5:0.85:3:3:0.2,eq=saturation=0.66:contrast=1.04:gamma=1.01,vignette=PI/5.1"
-      : "hqdn3d=0.7:0.7:2.8:2.8,unsharp=5:5:1.15:3:3:0.3,eq=saturation=0.74:contrast=1.055:gamma=0.98,vignette=PI/5.7";
-  const fadeDown = Math.max(0.02, Number(dipTime) - Number(preStart)).toFixed(3);
-  const fadeUp = Math.max(0.02, Number(recoverTime) - Number(dipTime)).toFixed(3);
-  const preKillFade = `eq=brightness='if(between(t,${preStart},${dipTime}),-0.21*(t-${preStart})/${fadeDown},if(between(t,${dipTime},${recoverTime}),-0.21*(${recoverTime}-t)/${fadeUp},0))':saturation='if(between(t,${preStart},${dipTime}),1-0.92*(t-${preStart})/${fadeDown},if(between(t,${dipTime},${recoverTime}),1-0.92*(${recoverTime}-t)/${fadeUp},1))':eval=frame`;
-  const impactStack = `${preKillFade},scale=${width + 32}:${height + 18},crop=${width}:${height}:x='(in_w-out_w)/2+if(between(t,${hitStart},${hitEnd}),7*sin(92*t),0)':y='(in_h-out_h)/2+if(between(t,${hitStart},${hitEnd}),5*cos(79*t),0)',rgbashift=rh=5:bh=-5:edge=wrap:enable='between(t,${hitStart},${hitEnd})',gblur=sigma=1.15:enable='between(t,${hitStart},${impact.toFixed(3)})',eq=brightness=0.3:enable='between(t,${impact.toFixed(3)},${Math.min(duration, impact + 0.075).toFixed(3)})'`;
-  if (effect === "impact") return `${base},${speed},${grade},${impactStack}`;
+      : "hqdn3d=0.7:0.7:2.8:2.8,unsharp=5:5:1.15:3:3:0.3,eq=saturation=0.74:contrast=1.055:gamma=0.98,vignette=PI/5.7");
+
+  const span = Math.max(duration, 0.2);
+  const zoom = [];
+  const shakeX = [];
+  const shakeY = [];
+  const color = [];
+  const flash = Number.isFinite(segment.flashAt) ? segment.flashAt : null;
+
+  if (effect === "push") zoom.push(`0.025*t/${num(span)}`);
+  if (effect === "punch") zoom.push("0.06");
+  if (effect === "drift") { shakeX.push("5*sin(1.1*t)"); shakeY.push("4*cos(0.9*t)"); }
+  if (effect === "shake") { shakeX.push("10*sin(45*t)"); shakeY.push("8*cos(39*t)"); }
+  if (effect === "flash") color.push("eq=brightness='if(lt(t,0.11),0.55*(1-t/0.11),0)':eval=frame");
   if (effect === "glitch") {
-    const pulseStart = Math.max(0.05, duration * 0.64).toFixed(3);
-    const pulseEnd = Math.min(duration, duration * 0.72).toFixed(3);
-    return `${base},${speed},${grade},rgbashift=rh=3:gv=1:bh=-3:edge=wrap:enable='between(t,${pulseStart},${pulseEnd})'`;
+    color.push(`rgbashift=rh=3:gv=1:bh=-3:edge=wrap:enable='between(t,${num(duration * 0.64)},${num(duration * 0.72)})'`);
   }
-  if (effect === "push") {
-    return `${base},${speed},${grade},scale=w='iw*(1+0.025*t/${Math.max(duration, 0.2)})':h='ih*(1+0.025*t/${Math.max(duration, 0.2)})':eval=frame,crop=${width}:${height}`;
+
+  // Beat pulses: a quick zoom kick on every strong music beat.
+  for (const beat of (segment.pulses || []).slice(0, 12)) {
+    zoom.push(`${num(segment.pulseAmount || 0.035)}*exp(-(t-${num(beat)})*14)*gte(t,${num(beat)})`);
   }
-  if (effect === "punch") {
-    return `${base},${speed},${grade},scale=${Math.ceil(width * 1.06)}:${Math.ceil(height * 1.06)},crop=${width}:${height}`;
+
+  // Whip-in from the previous clip: zoomed, blurred and bright for a few frames.
+  if (segment.whipIn) {
+    zoom.push("0.14*max(0,1-t/0.16)");
+    color.push("gblur=sigma=7:enable='between(t,0,0.07)'");
+    color.push("eq=brightness='0.16*max(0,1-t/0.09)':eval=frame");
   }
-  if (effect === "shake") {
-    return `${base},${speed},${grade},scale=${width + 36}:${height + 36},crop=${width}:${height}:x='18+10*sin(45*t)':y='18+8*cos(39*t)'`;
+
+  if (flash !== null) {
+    const preStart = flash - 0.62;
+    const dip = flash - 0.13;
+    const hitStart = flash - 0.055;
+    const hitEnd = flash + 0.16;
+    const fadeDown = Math.max(0.02, dip - preStart);
+    const fadeUp = Math.max(0.02, flash - dip);
+    // Grayscale pull-back before the hit, then RGB split, flash, zoom punch and shake.
+    color.push(`eq=brightness='if(between(t,${num(preStart)},${num(dip)}),-0.21*(t-${num(preStart)})/${num(fadeDown)},if(between(t,${num(dip)},${num(flash)}),-0.21*(${num(flash)}-t)/${num(fadeUp)},0))':saturation='if(between(t,${num(preStart)},${num(dip)}),1-0.92*(t-${num(preStart)})/${num(fadeDown)},if(between(t,${num(dip)},${num(flash)}),1-0.92*(${num(flash)}-t)/${num(fadeUp)},1))':eval=frame`);
+    color.push(`rgbashift=rh=6:bh=-6:edge=wrap:enable='between(t,${num(hitStart)},${num(hitEnd)})'`);
+    color.push(`gblur=sigma=1.15:enable='between(t,${num(hitStart)},${num(flash)})'`);
+    color.push(`eq=brightness='0.34*max(0,1-abs(t-${num(flash)})/0.07)':eval=frame`);
+    zoom.push(`0.09*exp(-(t-${num(flash)})*6.5)*gte(t,${num(flash)})`);
+    shakeX.push(`if(between(t,${num(hitStart)},${num(hitEnd + 0.12)}),8*sin(92*t),0)`);
+    shakeY.push(`if(between(t,${num(hitStart)},${num(hitEnd + 0.12)}),6*cos(79*t),0)`);
   }
-  if (effect === "flash") {
-    return `${base},${speed},${grade},eq=brightness='if(lt(t,0.11),0.55*(1-t/0.11),0)':eval=frame`;
+
+  // Secondary kills in a multi-kill get smaller hits.
+  for (const accent of (segment.accents || []).slice(0, 6)) {
+    color.push(`eq=brightness='0.2*max(0,1-abs(t-${num(accent)})/0.05)':eval=frame`);
+    color.push(`rgbashift=rh=4:bh=-4:edge=wrap:enable='between(t,${num(accent - 0.03)},${num(accent + 0.09)})'`);
+    zoom.push(`0.05*exp(-(t-${num(accent)})*10)*gte(t,${num(accent)})`);
+    shakeX.push(`if(between(t,${num(accent)},${num(accent + 0.14)}),5*sin(88*t),0)`);
   }
-  if (effect === "drift") {
-    return `${base},${speed},${grade},scale=${width + 20}:${height + 12},crop=${width}:${height}:x='10+5*sin(1.1*t)':y='6+4*cos(0.9*t)'`;
+
+  // Slow push into a frozen final frame.
+  if (freeze > 0.01) {
+    const freezeStart = Math.max(0, duration - freeze);
+    zoom.push(`0.07*min(1,max(0,(t-${num(freezeStart)})/${num(Math.max(freeze, 0.1))}))`);
   }
-  return `${base},${speed},${grade}`;
+
+  if (zoom.length || shakeX.length || shakeY.length) {
+    const padX = 40;
+    const padY = 24;
+    const z = zoom.length ? zoom.join("+") : "0";
+    chain.push(`scale=w='trunc(${width + padX}*(1+${z})/2)*2':h='trunc(${height + padY}*(1+${z})/2)*2':eval=frame`);
+    const x = shakeX.length ? shakeX.join("+") : "0";
+    const y = shakeY.length ? shakeY.join("+") : "0";
+    chain.push(`crop=${width}:${height}:x='max(0,min(in_w-out_w,(in_w-out_w)/2+${x}))':y='max(0,min(in_h-out_h,(in_h-out_h)/2+${y}))'`);
+  }
+  chain.push(...color);
+  return chain.join(",");
 }
 
 async function concatenate(plan, outputPath, audioPath, audioOffset, duration, workingDirectory, signal = null, audioMix = { sourceVolume: 0.72, musicVolume: 0.82 }) {
@@ -437,7 +552,9 @@ function summarize(blueprint, plan, reference) {
     averageHitSyncError: plan.length
       ? plan.reduce((sum, item) => sum + (item.hitSyncError || 0), 0) / plan.length
       : 0,
-    doubleTapMoments: plan.filter((item) => item.keyMomentType === "double-tap").length,
+    doubleTapMoments: new Set(plan.filter((item) => item.keyMomentType === "double-tap").map((item) => item.clipIndex)).size,
+    multiKillMoments: new Set(plan.filter((item) => item.keyMomentType === "multi-kill").map((item) => item.clipIndex)).size,
+    keyMoments: plan.reduce((sum, item, index) => sum + (plan.findIndex((other) => other.clipIndex === item.clipIndex) === index ? item.keyMoments?.length || 1 : 0), 0),
     reference: { duration: reference.duration, width: reference.width, height: reference.height }
   };
 }

@@ -118,14 +118,17 @@ async function sceneCuts(filePath, duration, threshold = 0.29) {
     .filter((time) => time > 0.12 && time < duration - 0.12);
 }
 
-async function audioOnsets(filePath, duration, startTime = 0) {
+async function audioOnsets(filePath, duration, startTime = 0, options = {}) {
   assertPositiveDuration(duration, filePath);
   const rate = 12000;
-  const { stdout } = await run(FFMPEG, [
+  const args = [
     "-hide_banner", "-loglevel", "error", "-ss", String(Math.max(0, startTime)), "-i", filePath,
-    "-t", String(duration), "-vn", "-ac", "1", "-ar", String(rate),
-    "-f", "f32le", "pipe:1"
-  ]);
+    "-t", String(duration), "-vn", "-ac", "1", "-ar", String(rate)
+  ];
+  // A high-pass view isolates crisp hit/kill sounds from explosions and music.
+  if (options.highpass) args.push("-af", `highpass=f=${Math.round(options.highpass)},highpass=f=${Math.round(options.highpass)}`);
+  args.push("-f", "f32le", "pipe:1");
+  const { stdout } = await run(FFMPEG, args);
   const samples = new Float32Array(stdout.buffer, stdout.byteOffset, Math.floor(stdout.byteLength / 4));
   const hop = 600;
   const energies = [];
@@ -220,10 +223,14 @@ function normalize(values) {
 }
 
 async function motionWindows(filePath, duration) {
+  return (await motionProfile(filePath, duration)).candidates;
+}
+
+async function motionProfile(filePath, duration) {
   assertPositiveDuration(duration, filePath);
   const width = 64;
   const height = 36;
-  const fps = 4;
+  const fps = 8;
   const scanDuration = Math.min(duration, 180);
   const { stdout } = await run(FFMPEG, [
     "-hide_banner", "-loglevel", "error", "-i", filePath,
@@ -250,7 +257,7 @@ async function motionWindows(filePath, duration) {
     if (selected.length >= 8) break;
   }
   if (!selected.length) selected.push({ time: Math.max(0, duration / 2), score: 0 });
-  return selected;
+  return { candidates: selected, curve: scores };
 }
 
 async function thumbnailDataUrl(filePath, time, width = 480) {
@@ -270,5 +277,5 @@ function assertPositiveDuration(duration, filePath) {
 
 module.exports = {
   run, probe, sceneCuts, audioOnsets, audioEnvelope, findAudioOffset, correlateEnvelopes,
-  motionWindows, thumbnailDataUrl, selectDuration, parsePacketDuration, FFMPEG, FFPROBE
+  motionWindows, motionProfile, thumbnailDataUrl, selectDuration, parsePacketDuration, FFMPEG, FFPROBE
 };

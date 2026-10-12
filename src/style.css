@@ -156,6 +156,34 @@ legend { font-size: 13px; color: #afb7b2; margin-bottom: 11px; }
 .preview-card { margin-top: 16px; border: 1px solid var(--line); background: #050708; overflow: hidden; }
 .preview-heading { padding: 12px 15px; display: flex; justify-content: space-between; color: #707a74; font: 9px DM Mono, monospace; letter-spacing: .1em; }
 .preview-card video { display: block; width: 100%; max-height: 72vh; background: black; }
+.medal-import { align-items: stretch; }
+.medal-import textarea { resize: vertical; min-height: 44px; }
+.file-value.error, .hint.error { color: #ff6d7f; }
+.lyrics-text { width: min(100%, 440px); margin-top: 14px; }
+.lyric-options { margin-top: 8px; }
+.font-match { width: min(100%, 440px); margin-top: 18px; padding-top: 16px; border-top: 1px dashed #252d2a; }
+.font-match p { margin: 0 0 12px; }
+.match-button { width: 100%; margin-top: 8px; border: 1px solid #3b4640; background: #141a17; padding: 10px 12px; cursor: pointer; font-size: 12px; font-weight: 600; }
+.match-button:hover { border-color: var(--acid); }
+.match-button:disabled { opacity: .4; cursor: wait; }
+.font-results { display: grid; gap: 5px; margin-top: 8px; }
+.font-results .hint { color: #7d8781; font: 10px DM Mono, monospace; }
+.font-choice { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 8px; text-align: left; border: 1px solid #252d2a; background: #0a0e10; padding: 8px 10px; cursor: pointer; font-size: 12px; }
+.font-choice b { color: var(--acid); font: 9px DM Mono, monospace; }
+.font-choice small { color: #68716c; font-size: 10px; margin-left: 4px; }
+.font-choice em { color: #8d9691; font: normal 10px DM Mono, monospace; }
+.font-choice:hover, .font-choice.active { border-color: var(--acid); }
+.instruction-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; min-height: 4px; }
+.instruction-chips span { border: 1px solid rgba(200,255,36,.4); color: var(--acid); background: rgba(200,255,36,.06); padding: 4px 7px; font: 9px DM Mono, monospace; }
+.instruction-chips em { color: #626b66; font: normal 9px DM Mono, monospace; }
+.watermark-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: -10px 0 20px; }
+.watermark-options select, .lyric-options select { min-width: 0; color: #e9ede9; border: 1px solid #303936; background: #090d0f; padding: 9px 8px; font-size: 11px; outline: none; }
+.watermark-box { position: absolute; border: 1.5px dashed #ff6d7f; background: rgba(255,109,127,.12); pointer-events: none; }
+.moment-track { position: relative; height: 10px; margin: 0 20px 2px; }
+.moment-tick { position: absolute; top: 0; width: 3px; height: 10px; margin-left: -1px; background: #8d9691; cursor: pointer; }
+.moment-tick.multi-kill { background: var(--acid); }
+.moment-tick.double-tap { background: #4ad6ff; }
+.moment-tick:hover { transform: scaleY(1.4); }
 .hidden { display: none !important; }
 
 footer { height: 70px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; color: #555e59; font: 9px DM Mono, monospace; letter-spacing: .06em; }

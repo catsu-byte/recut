@@ -4,12 +4,19 @@ const state = {
   referencePath: "",
   musicPath: "",
   lyricsPath: "",
+  lyricsText: "",
+  lyricsQuality: "auto",
+  lyricsLanguage: "",
   fontPath: "",
   fontName: "",
   overlayPath: "",
   overlayPosition: "top-right",
   instructions: "",
   removeMedalWatermark: false,
+  watermarkScope: "medal",
+  watermarkMode: "auto",
+  fontImagePath: "",
+  fontSampleText: "",
   medalClipPaths: [],
   impactOverrides: {},
   editingStyle: "balanced",
@@ -26,8 +33,9 @@ const state = {
 };
 
 const DRAFT_FIELDS = [
-  "referencePath", "musicPath", "lyricsPath", "fontPath", "fontName", "overlayPath", "overlayPosition",
-  "instructions", "removeMedalWatermark", "medalClipPaths", "impactOverrides", "editingStyle", "renderQuality",
+  "referencePath", "musicPath", "lyricsPath", "lyricsText", "lyricsQuality", "lyricsLanguage",
+  "fontPath", "fontName", "overlayPath", "overlayPosition", "fontImagePath", "fontSampleText",
+  "instructions", "removeMedalWatermark", "watermarkScope", "watermarkMode", "medalClipPaths", "impactOverrides", "editingStyle", "renderQuality",
   "sourceVolume", "musicVolume", "clipPaths", "outputDirectory", "duration", "aspectRatio"
 ];
 
@@ -47,7 +55,7 @@ app.innerHTML = `
         <span class="brand-mark"><i></i><i></i><i></i></span>
         <span>ReCut</span>
       </a>
-      <div class="top-meta" id="capabilityStatus" title="Checking local tools"><span class="status-dot"></span><span id="capabilityText">Checking local tools</span><span class="version">v0.7</span></div>
+      <div class="top-meta" id="capabilityStatus" title="Checking local tools"><span class="status-dot"></span><span id="capabilityText">Checking local tools</span><span class="version">v0.8</span></div>
     </header>
 
     <main>
@@ -77,10 +85,11 @@ app.innerHTML = `
               <button class="file-button" id="pickClips"><span>Add clips</span><kbd>1 OR MORE</kbd></button>
               <div class="file-value" id="clipsValue">No clips selected</div>
               <div class="clip-queue" id="clipQueue"></div>
-              <div class="inline-import">
-                <input id="medalUrl" type="url" placeholder="https://medal.tv/.../clips/..." aria-label="Medal.tv clip URL" />
-                <button id="importMedal">Import Medal link</button>
+              <div class="inline-import medal-import">
+                <textarea id="medalUrl" rows="2" placeholder="Paste one or more Medal.tv clip links (one per line)" aria-label="Medal.tv clip links"></textarea>
+                <button id="importMedal">Import</button>
               </div>
+              <div class="file-value" id="medalValue">Medal links are downloaded once and cached</div>
             </div>
           </article>
 
@@ -93,6 +102,22 @@ app.innerHTML = `
               <div class="file-value" id="musicValue">Using reference audio</div>
               <button class="file-button secondary-file" id="pickLyrics"><span>Exact timed lyrics <em>optional</em></span><kbd>LRC / SRT</kbd></button>
               <div class="file-value" id="lyricsValue">Automatic song transcription</div>
+              <textarea class="lyrics-text" id="lyricsText" rows="4" placeholder="Paste the song text (optional). The whole song is fine — ReCut finds the part that plays and fixes misheard words. LRC with [00:12.30] timestamps works too."></textarea>
+              <div class="asset-grid lyric-options">
+                <select id="lyricsQuality" aria-label="Lyric recognition quality">
+                  <option value="auto">Recognition: auto (GPU → best)</option>
+                  <option value="fast">Recognition: fast</option>
+                  <option value="accurate">Recognition: accurate</option>
+                  <option value="best">Recognition: best (slow on CPU)</option>
+                </select>
+                <select id="lyricsLanguage" aria-label="Song language">
+                  <option value="">Language: detect</option>
+                  <option value="de">Language: German</option>
+                  <option value="en">Language: English</option>
+                  <option value="es">Language: Spanish</option>
+                  <option value="fr">Language: French</option>
+                </select>
+              </div>
             </div>
           </article>
 
@@ -111,6 +136,15 @@ app.innerHTML = `
                 </select>
               </div>
               <div class="file-value" id="assetsValue">Bundled fonts · no image overlay</div>
+              <div class="font-match">
+                <p>Font from an image — choose a screenshot (e.g. from the reference edit) and type the text it shows.</p>
+                <div class="asset-grid">
+                  <button class="file-button" id="pickFontImage"><span>Text screenshot</span><kbd>PNG / JPG</kbd></button>
+                  <input id="fontSampleText" type="text" placeholder="Text in the image (e.g. HEADSHOT)" />
+                </div>
+                <button class="match-button" id="matchFont">Find matching font</button>
+                <div class="font-results" id="fontResults"></div>
+              </div>
             </div>
           </article>
         </div>
@@ -160,8 +194,19 @@ app.innerHTML = `
           </fieldset>
 
           <label class="control-label" for="instructions">Edit instructions</label>
-          <textarea id="instructions" rows="3" placeholder="e.g. Kills always at the end of each clip; sync exactly to beats"></textarea>
-          <label class="check-control"><input id="removeWatermark" type="checkbox" /> Crop Medal watermark edges</label>
+          <textarea id="instructions" rows="3" placeholder="e.g. Die Kills sind immer am Ende der Clips · exakt auf den Beat · keine Slowmo · Wasserzeichen bei allen Clips entfernen"></textarea>
+          <div class="instruction-chips" id="instructionChips"></div>
+          <label class="check-control"><input id="removeWatermark" type="checkbox" /> Remove watermark</label>
+          <div class="watermark-options" id="watermarkOptions">
+            <select id="watermarkScope" aria-label="Watermark clips">
+              <option value="medal">Medal imports only</option>
+              <option value="all">All clips</option>
+            </select>
+            <select id="watermarkMode" aria-label="Watermark method">
+              <option value="auto">Detect + erase</option>
+              <option value="crop">Crop edges</option>
+            </select>
+          </div>
 
           <button class="output-picker" id="pickOutput">
             <span><small>Save result to</small><strong id="outputValue">Choose a folder</strong></span>
@@ -227,7 +272,10 @@ function updateUi() {
     ? `${state.clipPaths.length} clip${state.clipPaths.length === 1 ? "" : "s"} selected`
     : "No clips selected";
   byId("musicValue").textContent = state.musicPath ? basename(state.musicPath) : "Using reference audio";
-  byId("lyricsValue").textContent = state.lyricsPath ? basename(state.lyricsPath) : "Automatic song transcription";
+  byId("lyricsValue").textContent = state.lyricsPath
+    ? basename(state.lyricsPath)
+    : state.lyricsText.trim() ? "Pasted song text · aligned to the audio" : "Automatic song transcription";
+  byId("watermarkOptions").classList.toggle("hidden", !state.removeMedalWatermark);
   byId("assetsValue").textContent = [
     state.fontPath ? basename(state.fontPath) : "Bundled fonts",
     state.overlayPath ? basename(state.overlayPath) : "no image overlay"
@@ -268,28 +316,84 @@ byId("pickClips").addEventListener("click", () => choose(window.recut.pickClips,
 }));
 byId("pickMusic").addEventListener("click", () => choose(window.recut.pickMusic, ([value]) => { state.musicPath = value; }));
 byId("pickLyrics").addEventListener("click", () => choose(window.recut.pickLyrics, ([value]) => { state.lyricsPath = value; }));
-byId("pickFont").addEventListener("click", () => choose(window.recut.pickFont, ([value]) => {
-  state.fontPath = value;
-  if (!state.fontName) state.fontName = basename(value).replace(/\.(ttf|otf|woff2?)$/i, "").replace(/[-_]+/g, " ");
+byId("pickFont").addEventListener("click", () => choose(window.recut.pickFont, ([value]) => useFont(value)));
+
+async function useFont(fontPath, family = "") {
+  state.fontPath = fontPath;
+  state.fontName = family || basename(fontPath).replace(/\.(ttf|otf|woff2?)$/i, "").replace(/[-_]+/g, " ");
   byId("fontName").value = state.fontName;
-}));
+  updateUi();
+  if (family) return;
+  try {
+    const info = await window.recut.fontInfo(fontPath);
+    if (info?.family && state.fontPath === fontPath) {
+      state.fontName = info.family;
+      byId("fontName").value = info.family;
+      updateUi();
+    }
+  } catch { /* the filename guess stays editable */ }
+}
+
+byId("pickFontImage").addEventListener("click", async () => {
+  const [value] = await window.recut.pickFontImage();
+  if (!value) return;
+  state.fontImagePath = value;
+  byId("pickFontImage").querySelector("span").textContent = basename(value);
+  saveDraft();
+});
+byId("fontSampleText").addEventListener("input", (event) => { state.fontSampleText = event.target.value; saveDraft(); });
+byId("matchFont").addEventListener("click", async () => {
+  const results = byId("fontResults");
+  if (!state.fontImagePath) { results.innerHTML = `<span class="hint">Choose a screenshot first.</span>`; return; }
+  if (!state.fontSampleText.trim()) { results.innerHTML = `<span class="hint">Type the text that is visible in the image.</span>`; return; }
+  byId("matchFont").disabled = true;
+  results.innerHTML = `<span class="hint">Comparing installed fonts…</span>`;
+  const stop = window.recut.onFontProgress(({ done, total }) => {
+    results.innerHTML = `<span class="hint">Comparing installed fonts… ${done}/${total}</span>`;
+  });
+  try {
+    const { candidates } = await window.recut.matchFont({ imagePath: state.fontImagePath, text: state.fontSampleText });
+    results.innerHTML = candidates.map((item, index) => `
+      <button class="font-choice${item.fontPath === state.fontPath ? " active" : ""}" data-path="${escapeHtml(item.fontPath)}" data-family="${escapeHtml(item.family)}">
+        <b>${index + 1}</b><span>${escapeHtml(item.family)} <small>${escapeHtml(item.style)}</small></span><em>${Math.round(Math.max(0, item.score) * 100)}%</em>
+      </button>`).join("") || `<span class="hint">No match found.</span>`;
+    results.querySelectorAll(".font-choice").forEach((button) => button.addEventListener("click", () => {
+      results.querySelectorAll(".font-choice").forEach((item) => item.classList.remove("active"));
+      button.classList.add("active");
+      useFont(button.dataset.path, button.dataset.family);
+    }));
+  } catch (error) {
+    results.innerHTML = `<span class="hint error">${escapeHtml(error.message || String(error))}</span>`;
+  } finally {
+    stop();
+    byId("matchFont").disabled = false;
+  }
+});
 byId("pickOverlay").addEventListener("click", () => choose(window.recut.pickOverlay, ([value]) => { state.overlayPath = value; }));
 byId("pickOutput").addEventListener("click", () => choose(window.recut.pickOutput, ([value]) => { state.outputDirectory = value; }));
 
 byId("importMedal").addEventListener("click", async () => {
   if (state.busy || !byId("medalUrl").value.trim()) return;
   setBusy(true, "Importing Medal…");
+  const stop = window.recut.onMedalProgress(({ index, total }) => {
+    byId("medalValue").textContent = `Downloading ${index + 1} of ${total}…`;
+  });
   try {
-    const result = await window.recut.importMedal(byId("medalUrl").value.trim());
-    state.clipPaths = [...new Set([...state.clipPaths, result.path])];
-    state.medalClipPaths = [...new Set([...state.medalClipPaths, result.path])];
-    byId("medalUrl").value = "";
-    state.analysis = null;
-    byId("analysisCard").classList.add("hidden");
-    byId("storyboard").classList.add("hidden");
+    const { imported, failed } = await window.recut.importMedal(byId("medalUrl").value.trim());
+    const paths = imported.map((item) => item.path);
+    state.clipPaths = [...new Set([...state.clipPaths, ...paths])];
+    state.medalClipPaths = [...new Set([...state.medalClipPaths, ...paths])];
+    byId("medalUrl").value = failed.map((item) => item.link).join("\n");
+    byId("medalValue").textContent = [
+      imported.length ? `${imported.length} clip${imported.length === 1 ? "" : "s"} imported` : "",
+      failed.length ? `${failed.length} failed: ${failed[0].error}` : ""
+    ].filter(Boolean).join(" · ");
+    byId("medalValue").classList.toggle("error", failed.length > 0);
+    if (imported.length) invalidateAnalysis();
   } catch (error) {
     showError(error);
   } finally {
+    stop();
     setBusy(false);
     updateUi();
   }
@@ -297,8 +401,30 @@ byId("importMedal").addEventListener("click", async () => {
 
 byId("fontName").addEventListener("input", (event) => { state.fontName = event.target.value; });
 byId("overlayPosition").addEventListener("change", (event) => { state.overlayPosition = event.target.value; });
-byId("instructions").addEventListener("input", (event) => { state.instructions = event.target.value; state.analysis = null; updateUi(); });
-byId("removeWatermark").addEventListener("change", (event) => { state.removeMedalWatermark = event.target.checked; });
+byId("instructions").addEventListener("input", (event) => {
+  state.instructions = event.target.value;
+  state.analysis = null;
+  updateUi();
+  scheduleInstructionPreview();
+});
+byId("removeWatermark").addEventListener("change", (event) => { state.removeMedalWatermark = event.target.checked; updateUi(); });
+byId("watermarkScope").addEventListener("change", (event) => { state.watermarkScope = event.target.value; saveDraft(); });
+byId("watermarkMode").addEventListener("change", (event) => { state.watermarkMode = event.target.value; saveDraft(); });
+byId("lyricsText").addEventListener("input", (event) => { state.lyricsText = event.target.value; updateUi(); });
+byId("lyricsQuality").addEventListener("change", (event) => { state.lyricsQuality = event.target.value; saveDraft(); });
+byId("lyricsLanguage").addEventListener("change", (event) => { state.lyricsLanguage = event.target.value; saveDraft(); });
+
+let instructionTimer = null;
+function scheduleInstructionPreview() {
+  clearTimeout(instructionTimer);
+  instructionTimer = setTimeout(async () => {
+    try {
+      const parsed = await window.recut.parseInstructions(state.instructions);
+      byId("instructionChips").innerHTML = parsed.labels.map((label) => `<span>${escapeHtml(label)}</span>`).join("")
+        || (state.instructions.trim() ? `<em>No directive recognised yet</em>` : "");
+    } catch { /* preview only */ }
+  }, 220);
+}
 byId("sourceVolume").addEventListener("input", (event) => { state.sourceVolume = Number(event.target.value); updateUi(); });
 byId("musicVolume").addEventListener("input", (event) => { state.musicVolume = Number(event.target.value); updateUi(); });
 
@@ -335,12 +461,17 @@ function payload() {
     referencePath: state.referencePath,
     musicPath: state.musicPath,
     lyricsPath: state.lyricsPath,
+    lyricsText: state.lyricsText,
+    lyricsQuality: state.lyricsQuality,
+    lyricsLanguage: state.lyricsLanguage,
     fontPath: state.fontPath,
     fontName: state.fontName,
     overlayPath: state.overlayPath,
     overlayPosition: state.overlayPosition,
     instructions: state.instructions,
     removeMedalWatermark: state.removeMedalWatermark,
+    watermarkScope: state.watermarkScope,
+    watermarkMode: state.watermarkMode,
     medalClipPaths: state.medalClipPaths,
     impactOverrides: state.impactOverrides,
     editingStyle: state.editingStyle,
@@ -380,9 +511,11 @@ byId("renderButton").addEventListener("click", async () => {
     state.result = await window.recut.render(payload());
     showAnalysis(state.result);
     const captions = state.result.captions;
-    byId("resultSummary").textContent = ["ready", "provided"].includes(captions?.status)
-      ? `Created ${captions.phrases} lyric phrase${captions.phrases === 1 ? "" : "s"} and ${captions.keywords} on-beat impact word${captions.keywords === 1 ? "" : "s"}.`
-      : "Montage created. Automatic lyric transcription was unavailable on this computer.";
+    byId("resultSummary").textContent = ["ready", "provided", "aligned"].includes(captions?.status)
+      ? `Created ${captions.phrases} lyric phrase${captions.phrases === 1 ? "" : "s"} and ${captions.keywords} on-beat impact word${captions.keywords === 1 ? "" : "s"}${captions.status === "aligned" ? " from your song text" : ""}${captions.vocalsSeparated ? " (vocals isolated)" : ""}.`
+      : captions?.status === "disabled"
+        ? "Montage created without lyrics, as instructed."
+        : "Montage created. Automatic lyric transcription was unavailable on this computer (install Python + faster-whisper).";
     byId("resultCard").classList.remove("hidden");
     byId("resultVideo").src = window.recut.previewUrl(state.result.previewPath);
     byId("previewMeta").textContent = `${state.result.outputProfile.width}×${state.result.outputProfile.height} · ${state.result.outputProfile.fps} FPS`;
@@ -429,6 +562,8 @@ function showAnalysis(data) {
   const metrics = [
     ["CUTS", data.cuts],
     ["AUDIO PEAKS", data.detectedBeats],
+    ["KEY MOMENTS", data.keyMoments || 0],
+    ["MULTI-KILLS", data.multiKillMoments || 0],
     ["D-TAPS", data.doubleTapMoments || 0],
     ["HIT SYNC", `${Math.round((data.averageHitSyncError || 0) * 1000)}ms`],
     ["LENGTH", `${Math.round(data.duration)}s`],
@@ -473,12 +608,18 @@ function showStoryboard(insights) {
     const selected = Number.isFinite(Number(state.impactOverrides[item.path]))
       ? Number(state.impactOverrides[item.path]) : item.impactTime;
     const confidence = Math.round(Math.min(1, Math.max(0, item.impactScore || 0)) * 100);
+    const box = item.watermark && state.removeMedalWatermark && item.width
+      ? `<i class="watermark-box" title="Detected watermark (${escapeHtml(item.watermark.corner)})" style="left:${(item.watermark.x / item.width) * 100}%;top:${(item.watermark.y / item.height) * 100}%;width:${(item.watermark.w / item.width) * 100}%;height:${(item.watermark.h / item.height) * 100}%"></i>`
+      : "";
+    const ticks = (item.keyMoments || []).map((moment) =>
+      `<i class="moment-tick ${moment.type}" style="left:${(moment.time / item.duration) * 100}%" title="${escapeHtml(moment.type)} · ${moment.time.toFixed(2)}s" data-time="${moment.time}"></i>`).join("");
     return `<article class="review-card" data-path="${escapeHtml(item.path)}">
-      <div class="review-image">${item.thumbnail ? `<img src="${item.thumbnail}" alt="Detected key moment in ${escapeHtml(item.name)}" />` : "<span>No preview</span>"}<b>${String(index + 1).padStart(2, "0")}</b></div>
+      <div class="review-image">${item.thumbnail ? `<img src="${item.thumbnail}" alt="Detected key moment in ${escapeHtml(item.name)}" />` : "<span>No preview</span>"}${box}<b>${String(index + 1).padStart(2, "0")}</b></div>
       <div class="review-copy">
-        <div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.keyMomentType || "impact")} · ${confidence}% signal</span></div>
+        <div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.keyMomentType || "impact")} · ${confidence}% signal · ${(item.keyMoments || []).length} moment${(item.keyMoments || []).length === 1 ? "" : "s"}</span></div>
         <output>${selected.toFixed(2)}s</output>
       </div>
+      <div class="moment-track">${ticks}</div>
       <input class="impact-slider" type="range" min="0.05" max="${Math.max(0.1, item.duration - 0.05)}" value="${selected}" step="0.05" aria-label="Key moment for ${escapeHtml(item.name)}" />
       <div class="review-scale"><span>start</span><button class="reset-impact">Use auto</button><span>${item.duration.toFixed(1)}s</span></div>
     </article>`;
@@ -489,11 +630,16 @@ function showStoryboard(insights) {
       state.impactOverrides[card.dataset.path] = Number(slider.value);
       card.querySelector("output").textContent = `${Number(slider.value).toFixed(2)}s`;
     });
+    card.querySelectorAll(".moment-tick").forEach((tick) => tick.addEventListener("click", () => {
+      slider.value = tick.dataset.time;
+      slider.dispatchEvent(new Event("input"));
+    }));
     card.querySelector(".reset-impact").addEventListener("click", () => {
       const insight = insights.find((item) => item.path === card.dataset.path);
+      const auto = insight.autoImpactTime ?? insight.impactTime;
       delete state.impactOverrides[card.dataset.path];
-      slider.value = insight.impactTime;
-      card.querySelector("output").textContent = `${insight.impactTime.toFixed(2)}s`;
+      slider.value = auto;
+      card.querySelector("output").textContent = `${auto.toFixed(2)}s`;
     });
   });
 }
@@ -530,6 +676,14 @@ function showError(error) {
 
 byId("instructions").value = state.instructions;
 byId("removeWatermark").checked = state.removeMedalWatermark;
+byId("watermarkScope").value = state.watermarkScope;
+byId("watermarkMode").value = state.watermarkMode;
+byId("lyricsText").value = state.lyricsText;
+byId("lyricsQuality").value = state.lyricsQuality;
+byId("lyricsLanguage").value = state.lyricsLanguage;
+byId("fontSampleText").value = state.fontSampleText;
+if (state.fontImagePath) byId("pickFontImage").querySelector("span").textContent = basename(state.fontImagePath);
+scheduleInstructionPreview();
 byId("fontName").value = state.fontName;
 byId("overlayPosition").value = state.overlayPosition;
 byId("duration").value = state.duration;
@@ -541,8 +695,14 @@ document.querySelectorAll(".quality-choice").forEach((item) => item.classList.to
 updateUi();
 
 window.recut.capabilities().then((capabilities) => {
-  byId("capabilityText").textContent = capabilities.lyrics.available ? "Local AI ready" : "Local edit ready · lyrics optional";
-  byId("capabilityStatus").title = capabilities.lyrics.available ? "FFmpeg and automatic lyric captions are ready" : capabilities.lyrics.message;
+  byId("capabilityText").textContent = capabilities.lyrics.available
+    ? `Local AI ready${capabilities.lyrics.vocalSeparation ? " · vocal isolation" : ""}`
+    : "Local edit ready · lyrics optional";
+  byId("capabilityStatus").title = [
+    capabilities.lyrics.available ? "FFmpeg and automatic lyric captions are ready." : capabilities.lyrics.message,
+    capabilities.lyrics.vocalSeparation ? "Demucs vocal isolation is installed." : "Optional: pip install demucs for cleaner lyric timing.",
+    capabilities.ytDlp ? "yt-dlp is available as Medal fallback." : "Optional: install yt-dlp as Medal download fallback."
+  ].join(" ");
   document.querySelector(".status-dot").classList.toggle("partial", !capabilities.lyrics.available);
 }).catch(() => {
   byId("capabilityText").textContent = "Local processing";
