@@ -62,7 +62,7 @@ ${clips.join("\n")}
 `;
 }
 
-function createReport({ blueprint, plan, referencePath, musicPath, musicOffset = 0, musicMatchConfidence = 0, musicMatchMethod = null, outputProfile = null, captions = null, outputPath }) {
+function createReport({ blueprint, plan, referencePath, musicPath, musicOffset = 0, musicMatchConfidence = 0, musicMatchMethod = null, outputProfile = null, captions = null, instructions = null, customAssets = null, editingStyle = "balanced", renderQuality = "standard", audioMix = null, outputPath }) {
   return {
     generatedAt: new Date().toISOString(),
     referencePath,
@@ -72,11 +72,16 @@ function createReport({ blueprint, plan, referencePath, musicPath, musicOffset =
     musicMatchMethod,
     outputProfile,
     captions,
+    instructions,
+    customAssets,
+    editingStyle,
+    renderQuality,
+    audioMix,
     outputPath,
     duration: blueprint.duration,
     detectedSceneCuts: blueprint.detectedSceneCuts,
     detectedBeats: blueprint.detectedBeats,
-    segments: plan.map(({ index, timelineStart, duration, sourcePath, sourceStart, speed, effect, intensity, motionScore, impactTime }) => ({
+    segments: plan.map(({ index, timelineStart, duration, sourcePath, sourceStart, speed, effect, intensity, motionScore, impactTime, hitTargetTime, hitSyncError, keyMomentType }) => ({
       index,
       timelineStart: round(timelineStart),
       duration: round(duration),
@@ -86,7 +91,10 @@ function createReport({ blueprint, plan, referencePath, musicPath, musicOffset =
       effect,
       intensity: round(intensity),
       motionScore: round(motionScore),
-      impactTime: round(impactTime || 0)
+      impactTime: round(impactTime || 0),
+      hitTargetTime: round(hitTargetTime || 0),
+      hitSyncError: round(hitSyncError || 0),
+      keyMomentType: keyMomentType || "impact"
     }))
   };
 }

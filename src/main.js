@@ -4,6 +4,18 @@ const state = {
   referencePath: "",
   musicPath: "",
   lyricsPath: "",
+  fontPath: "",
+  fontName: "",
+  overlayPath: "",
+  overlayPosition: "top-right",
+  instructions: "",
+  removeMedalWatermark: false,
+  medalClipPaths: [],
+  impactOverrides: {},
+  editingStyle: "balanced",
+  renderQuality: "standard",
+  sourceVolume: 0.72,
+  musicVolume: 0.82,
   clipPaths: [],
   outputDirectory: "",
   duration: 30,
@@ -12,6 +24,19 @@ const state = {
   analysis: null,
   result: null
 };
+
+const DRAFT_FIELDS = [
+  "referencePath", "musicPath", "lyricsPath", "fontPath", "fontName", "overlayPath", "overlayPosition",
+  "instructions", "removeMedalWatermark", "medalClipPaths", "impactOverrides", "editingStyle", "renderQuality",
+  "sourceVolume", "musicVolume", "clipPaths", "outputDirectory", "duration", "aspectRatio"
+];
+
+try {
+  const saved = JSON.parse(localStorage.getItem("recut-draft-v1") || "null");
+  if (saved && typeof saved === "object") {
+    for (const key of DRAFT_FIELDS) if (key in saved) state[key] = saved[key];
+  }
+} catch { /* a broken draft should never prevent the editor from opening */ }
 
 const app = document.querySelector("#app");
 
@@ -22,7 +47,7 @@ app.innerHTML = `
         <span class="brand-mark"><i></i><i></i><i></i></span>
         <span>ReCut</span>
       </a>
-      <div class="top-meta"><span class="status-dot"></span> Local processing <span class="version">v0.6</span></div>
+      <div class="top-meta" id="capabilityStatus" title="Checking local tools"><span class="status-dot"></span><span id="capabilityText">Checking local tools</span><span class="version">v0.7</span></div>
     </header>
 
     <main>
@@ -51,6 +76,11 @@ app.innerHTML = `
               <p>Pick one or more highlights. Choose again to add more.</p>
               <button class="file-button" id="pickClips"><span>Add clips</span><kbd>1 OR MORE</kbd></button>
               <div class="file-value" id="clipsValue">No clips selected</div>
+              <div class="clip-queue" id="clipQueue"></div>
+              <div class="inline-import">
+                <input id="medalUrl" type="url" placeholder="https://medal.tv/.../clips/..." aria-label="Medal.tv clip URL" />
+                <button id="importMedal">Import Medal link</button>
+              </div>
             </div>
           </article>
 
@@ -63,6 +93,24 @@ app.innerHTML = `
               <div class="file-value" id="musicValue">Using reference audio</div>
               <button class="file-button secondary-file" id="pickLyrics"><span>Exact timed lyrics <em>optional</em></span><kbd>LRC / SRT</kbd></button>
               <div class="file-value" id="lyricsValue">Automatic song transcription</div>
+            </div>
+          </article>
+
+          <article class="step-card optional" data-kind="assets">
+            <div class="step-number">04</div>
+            <div class="step-copy">
+              <h2>Overlay assets <em>optional</em></h2>
+              <p>Use a local font and a PNG/WebP/JPG asset in the final video.</p>
+              <div class="asset-grid">
+                <button class="file-button" id="pickFont"><span>Custom font</span><kbd>TTF / OTF</kbd></button>
+                <input id="fontName" type="text" placeholder="Font family name (e.g. Inter)" />
+                <button class="file-button" id="pickOverlay"><span>Image overlay</span><kbd>PNG / WEBP</kbd></button>
+                <select id="overlayPosition" aria-label="Overlay position">
+                  <option value="top-right">Top right</option><option value="top-left">Top left</option>
+                  <option value="bottom-right">Bottom right</option><option value="bottom-left">Bottom left</option>
+                </select>
+              </div>
+              <div class="file-value" id="assetsValue">Bundled fonts · no image overlay</div>
             </div>
           </article>
         </div>
@@ -84,6 +132,36 @@ app.innerHTML = `
               <button class="ratio" data-ratio="9:16">9:16 <small>Shorts</small></button>
             </div>
           </fieldset>
+
+          <fieldset>
+            <legend>Editing style</legend>
+            <div class="segmented three-way" id="stylePicker">
+              <button class="style-choice" data-style="cinematic">Cinematic<small>slow + clean</small></button>
+              <button class="style-choice active" data-style="balanced">Balanced<small>adaptive</small></button>
+              <button class="style-choice" data-style="aggressive">Aggressive<small>fast + strict</small></button>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Render quality</legend>
+            <div class="segmented three-way" id="qualityPicker">
+              <button class="quality-choice" data-quality="draft">Draft<small>fast</small></button>
+              <button class="quality-choice active" data-quality="standard">High<small>default</small></button>
+              <button class="quality-choice" data-quality="master">Master<small>large</small></button>
+            </div>
+          </fieldset>
+
+          <fieldset class="audio-mix">
+            <legend>Audio mix</legend>
+            <label for="sourceVolume">Game <output id="sourceVolumeValue">72%</output></label>
+            <input id="sourceVolume" type="range" min="0" max="1.5" value="0.72" step="0.01" />
+            <label for="musicVolume">Music <output id="musicVolumeValue">82%</output></label>
+            <input id="musicVolume" type="range" min="0" max="1.5" value="0.82" step="0.01" />
+          </fieldset>
+
+          <label class="control-label" for="instructions">Edit instructions</label>
+          <textarea id="instructions" rows="3" placeholder="e.g. Kills always at the end of each clip; sync exactly to beats"></textarea>
+          <label class="check-control"><input id="removeWatermark" type="checkbox" /> Crop Medal watermark edges</label>
 
           <button class="output-picker" id="pickOutput">
             <span><small>Save result to</small><strong id="outputValue">Choose a folder</strong></span>
@@ -108,8 +186,16 @@ app.innerHTML = `
         <div class="metrics" id="metrics"></div>
       </section>
 
+      <section class="storyboard hidden" id="storyboard">
+        <div class="storyboard-heading">
+          <div><p class="eyebrow">HUMAN REVIEW</p><h2>Check every key moment.</h2></div>
+          <p>Move the marker when automation picked the wrong hit. Your reviewed values are used during render.</p>
+        </div>
+        <div class="review-grid" id="reviewGrid"></div>
+      </section>
+
       <section class="progress-card hidden" id="progressCard" aria-live="polite">
-        <div class="progress-copy"><span id="progressMessage">Preparing</span><strong id="progressPercent">0%</strong></div>
+        <div class="progress-copy"><span id="progressMessage">Preparing</span><div><button class="cancel-render hidden" id="cancelRender">Cancel</button><strong id="progressPercent">0%</strong></div></div>
         <div class="progress-track"><div id="progressBar"></div></div>
       </section>
 
@@ -121,6 +207,10 @@ app.innerHTML = `
           <p id="resultSummary">Preview video, lyric captions, editable Resolve timeline and analysis report were created.</p>
         </div>
         <button id="revealButton">Show files <span>↗</span></button>
+      </section>
+      <section class="preview-card hidden" id="previewCard">
+        <div class="preview-heading"><span>FINAL PREVIEW</span><span id="previewMeta"></span></div>
+        <video id="resultVideo" controls playsinline preload="metadata"></video>
       </section>
     </main>
 
@@ -138,8 +228,15 @@ function updateUi() {
     : "No clips selected";
   byId("musicValue").textContent = state.musicPath ? basename(state.musicPath) : "Using reference audio";
   byId("lyricsValue").textContent = state.lyricsPath ? basename(state.lyricsPath) : "Automatic song transcription";
+  byId("assetsValue").textContent = [
+    state.fontPath ? basename(state.fontPath) : "Bundled fonts",
+    state.overlayPath ? basename(state.overlayPath) : "no image overlay"
+  ].join(" · ");
   byId("outputValue").textContent = state.outputDirectory || "Choose a folder";
   byId("durationValue").textContent = `${state.duration} sec`;
+  byId("sourceVolumeValue").textContent = `${Math.round(state.sourceVolume * 100)}%`;
+  byId("musicVolumeValue").textContent = `${Math.round(state.musicVolume * 100)}%`;
+  renderClipQueue();
 
   const canAnalyze = Boolean(state.referencePath && state.clipPaths.length >= 1);
   const canRender = Boolean(canAnalyze && state.outputDirectory && state.analysis);
@@ -147,6 +244,7 @@ function updateUi() {
   byId("renderButton").disabled = !canRender || state.busy;
   byId("readyState").textContent = canRender ? "READY TO RENDER" : canAnalyze ? "READY TO ANALYZE" : "ADD REFERENCE + CLIP";
   byId("readyState").classList.toggle("ready", canAnalyze);
+  saveDraft();
 }
 
 async function choose(handler, assign) {
@@ -157,7 +255,9 @@ async function choose(handler, assign) {
     state.analysis = null;
     state.result = null;
     byId("analysisCard").classList.add("hidden");
+    byId("storyboard").classList.add("hidden");
     byId("resultCard").classList.add("hidden");
+    byId("previewCard").classList.add("hidden");
     updateUi();
   }
 }
@@ -168,12 +268,57 @@ byId("pickClips").addEventListener("click", () => choose(window.recut.pickClips,
 }));
 byId("pickMusic").addEventListener("click", () => choose(window.recut.pickMusic, ([value]) => { state.musicPath = value; }));
 byId("pickLyrics").addEventListener("click", () => choose(window.recut.pickLyrics, ([value]) => { state.lyricsPath = value; }));
+byId("pickFont").addEventListener("click", () => choose(window.recut.pickFont, ([value]) => {
+  state.fontPath = value;
+  if (!state.fontName) state.fontName = basename(value).replace(/\.(ttf|otf|woff2?)$/i, "").replace(/[-_]+/g, " ");
+  byId("fontName").value = state.fontName;
+}));
+byId("pickOverlay").addEventListener("click", () => choose(window.recut.pickOverlay, ([value]) => { state.overlayPath = value; }));
 byId("pickOutput").addEventListener("click", () => choose(window.recut.pickOutput, ([value]) => { state.outputDirectory = value; }));
+
+byId("importMedal").addEventListener("click", async () => {
+  if (state.busy || !byId("medalUrl").value.trim()) return;
+  setBusy(true, "Importing Medal…");
+  try {
+    const result = await window.recut.importMedal(byId("medalUrl").value.trim());
+    state.clipPaths = [...new Set([...state.clipPaths, result.path])];
+    state.medalClipPaths = [...new Set([...state.medalClipPaths, result.path])];
+    byId("medalUrl").value = "";
+    state.analysis = null;
+    byId("analysisCard").classList.add("hidden");
+    byId("storyboard").classList.add("hidden");
+  } catch (error) {
+    showError(error);
+  } finally {
+    setBusy(false);
+    updateUi();
+  }
+});
+
+byId("fontName").addEventListener("input", (event) => { state.fontName = event.target.value; });
+byId("overlayPosition").addEventListener("change", (event) => { state.overlayPosition = event.target.value; });
+byId("instructions").addEventListener("input", (event) => { state.instructions = event.target.value; state.analysis = null; updateUi(); });
+byId("removeWatermark").addEventListener("change", (event) => { state.removeMedalWatermark = event.target.checked; });
+byId("sourceVolume").addEventListener("input", (event) => { state.sourceVolume = Number(event.target.value); updateUi(); });
+byId("musicVolume").addEventListener("input", (event) => { state.musicVolume = Number(event.target.value); updateUi(); });
+
+document.querySelectorAll(".style-choice").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll(".style-choice").forEach((item) => item.classList.remove("active"));
+  button.classList.add("active");
+  state.editingStyle = button.dataset.style;
+}));
+
+document.querySelectorAll(".quality-choice").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll(".quality-choice").forEach((item) => item.classList.remove("active"));
+  button.classList.add("active");
+  state.renderQuality = button.dataset.quality;
+}));
 
 byId("duration").addEventListener("input", (event) => {
   state.duration = Number(event.target.value);
   state.analysis = null;
   byId("analysisCard").classList.add("hidden");
+  byId("storyboard").classList.add("hidden");
   updateUi();
 });
 
@@ -190,6 +335,19 @@ function payload() {
     referencePath: state.referencePath,
     musicPath: state.musicPath,
     lyricsPath: state.lyricsPath,
+    fontPath: state.fontPath,
+    fontName: state.fontName,
+    overlayPath: state.overlayPath,
+    overlayPosition: state.overlayPosition,
+    instructions: state.instructions,
+    removeMedalWatermark: state.removeMedalWatermark,
+    medalClipPaths: state.medalClipPaths,
+    impactOverrides: state.impactOverrides,
+    editingStyle: state.editingStyle,
+    renderQuality: state.renderQuality,
+    sourceVolume: state.sourceVolume,
+    musicVolume: state.musicVolume,
+    analysisId: state.analysis?.analysisId,
     clipPaths: state.clipPaths,
     outputDirectory: state.outputDirectory,
     duration: state.duration,
@@ -198,6 +356,7 @@ function payload() {
 }
 
 byId("analyzeButton").addEventListener("click", async () => {
+  byId("progressBar").classList.remove("error");
   setBusy(true, "Analyzing…");
   try {
     state.analysis = await window.recut.inspect(payload());
@@ -210,9 +369,13 @@ byId("analyzeButton").addEventListener("click", async () => {
 });
 
 byId("renderButton").addEventListener("click", async () => {
+  byId("progressBar").classList.remove("error");
+  byId("progressBar").style.width = "0";
   setBusy(true, "Rendering…");
   byId("progressCard").classList.remove("hidden");
+  byId("cancelRender").classList.remove("hidden");
   byId("resultCard").classList.add("hidden");
+  byId("previewCard").classList.add("hidden");
   try {
     state.result = await window.recut.render(payload());
     showAnalysis(state.result);
@@ -221,12 +384,23 @@ byId("renderButton").addEventListener("click", async () => {
       ? `Created ${captions.phrases} lyric phrase${captions.phrases === 1 ? "" : "s"} and ${captions.keywords} on-beat impact word${captions.keywords === 1 ? "" : "s"}.`
       : "Montage created. Automatic lyric transcription was unavailable on this computer.";
     byId("resultCard").classList.remove("hidden");
+    byId("resultVideo").src = window.recut.previewUrl(state.result.previewPath);
+    byId("previewMeta").textContent = `${state.result.outputProfile.width}×${state.result.outputProfile.height} · ${state.result.outputProfile.fps} FPS`;
+    byId("previewCard").classList.remove("hidden");
     byId("resultCard").scrollIntoView({ behavior: "smooth", block: "center" });
   } catch (error) {
     showError(error);
   } finally {
+    byId("cancelRender").classList.add("hidden");
     setBusy(false);
   }
+});
+
+byId("cancelRender").addEventListener("click", async () => {
+  byId("cancelRender").disabled = true;
+  byId("progressMessage").textContent = "Cancelling after the current operation…";
+  await window.recut.cancelRender();
+  byId("cancelRender").disabled = false;
 });
 
 byId("revealButton").addEventListener("click", () => {
@@ -255,11 +429,94 @@ function showAnalysis(data) {
   const metrics = [
     ["CUTS", data.cuts],
     ["AUDIO PEAKS", data.detectedBeats],
+    ["D-TAPS", data.doubleTapMoments || 0],
+    ["HIT SYNC", `${Math.round((data.averageHitSyncError || 0) * 1000)}ms`],
     ["LENGTH", `${Math.round(data.duration)}s`],
     ["FORMAT", state.aspectRatio]
   ];
   byId("metrics").innerHTML = metrics.map(([label, value]) => `<div><strong>${value}</strong><span>${label}</span></div>`).join("");
+  if (data.clipInsights) showStoryboard(data.clipInsights);
   updateUi();
+}
+
+function renderClipQueue() {
+  const queue = byId("clipQueue");
+  if (!queue) return;
+  queue.innerHTML = state.clipPaths.map((clipPath, index) => `
+    <div class="queue-item" data-path="${escapeHtml(clipPath)}">
+      <span><b>${String(index + 1).padStart(2, "0")}</b>${escapeHtml(basename(clipPath))}</span>
+      <div>
+        <button data-action="up" aria-label="Move clip up" ${index === 0 ? "disabled" : ""}>↑</button>
+        <button data-action="down" aria-label="Move clip down" ${index === state.clipPaths.length - 1 ? "disabled" : ""}>↓</button>
+        <button data-action="remove" aria-label="Remove clip">×</button>
+      </div>
+    </div>`).join("");
+  queue.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => {
+    const item = button.closest(".queue-item");
+    const clipPath = item.dataset.path;
+    const index = state.clipPaths.indexOf(clipPath);
+    if (button.dataset.action === "remove") {
+      state.clipPaths.splice(index, 1);
+      state.medalClipPaths = state.medalClipPaths.filter((value) => value !== clipPath);
+      delete state.impactOverrides[clipPath];
+    } else {
+      const target = button.dataset.action === "up" ? index - 1 : index + 1;
+      [state.clipPaths[index], state.clipPaths[target]] = [state.clipPaths[target], state.clipPaths[index]];
+    }
+    invalidateAnalysis();
+  }));
+}
+
+function showStoryboard(insights) {
+  byId("storyboard").classList.remove("hidden");
+  byId("reviewGrid").innerHTML = insights.map((item, index) => {
+    const selected = Number.isFinite(Number(state.impactOverrides[item.path]))
+      ? Number(state.impactOverrides[item.path]) : item.impactTime;
+    const confidence = Math.round(Math.min(1, Math.max(0, item.impactScore || 0)) * 100);
+    return `<article class="review-card" data-path="${escapeHtml(item.path)}">
+      <div class="review-image">${item.thumbnail ? `<img src="${item.thumbnail}" alt="Detected key moment in ${escapeHtml(item.name)}" />` : "<span>No preview</span>"}<b>${String(index + 1).padStart(2, "0")}</b></div>
+      <div class="review-copy">
+        <div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.keyMomentType || "impact")} · ${confidence}% signal</span></div>
+        <output>${selected.toFixed(2)}s</output>
+      </div>
+      <input class="impact-slider" type="range" min="0.05" max="${Math.max(0.1, item.duration - 0.05)}" value="${selected}" step="0.05" aria-label="Key moment for ${escapeHtml(item.name)}" />
+      <div class="review-scale"><span>start</span><button class="reset-impact">Use auto</button><span>${item.duration.toFixed(1)}s</span></div>
+    </article>`;
+  }).join("");
+  byId("reviewGrid").querySelectorAll(".review-card").forEach((card) => {
+    const slider = card.querySelector(".impact-slider");
+    slider.addEventListener("input", () => {
+      state.impactOverrides[card.dataset.path] = Number(slider.value);
+      card.querySelector("output").textContent = `${Number(slider.value).toFixed(2)}s`;
+    });
+    card.querySelector(".reset-impact").addEventListener("click", () => {
+      const insight = insights.find((item) => item.path === card.dataset.path);
+      delete state.impactOverrides[card.dataset.path];
+      slider.value = insight.impactTime;
+      card.querySelector("output").textContent = `${insight.impactTime.toFixed(2)}s`;
+    });
+  });
+}
+
+function invalidateAnalysis() {
+  state.analysis = null;
+  state.result = null;
+  byId("analysisCard").classList.add("hidden");
+  byId("storyboard").classList.add("hidden");
+  byId("resultCard").classList.add("hidden");
+  byId("previewCard").classList.add("hidden");
+  updateUi();
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
+}
+
+function saveDraft() {
+  try {
+    const draft = Object.fromEntries(DRAFT_FIELDS.map((key) => [key, state[key]]));
+    localStorage.setItem("recut-draft-v1", JSON.stringify(draft));
+  } catch { /* persistence is a convenience, not a render dependency */ }
 }
 
 function showError(error) {
@@ -271,4 +528,22 @@ function showError(error) {
   byId("progressBar").classList.add("error");
 }
 
+byId("instructions").value = state.instructions;
+byId("removeWatermark").checked = state.removeMedalWatermark;
+byId("fontName").value = state.fontName;
+byId("overlayPosition").value = state.overlayPosition;
+byId("duration").value = state.duration;
+byId("sourceVolume").value = state.sourceVolume;
+byId("musicVolume").value = state.musicVolume;
+document.querySelectorAll(".ratio").forEach((item) => item.classList.toggle("active", item.dataset.ratio === state.aspectRatio));
+document.querySelectorAll(".style-choice").forEach((item) => item.classList.toggle("active", item.dataset.style === state.editingStyle));
+document.querySelectorAll(".quality-choice").forEach((item) => item.classList.toggle("active", item.dataset.quality === state.renderQuality));
 updateUi();
+
+window.recut.capabilities().then((capabilities) => {
+  byId("capabilityText").textContent = capabilities.lyrics.available ? "Local AI ready" : "Local edit ready · lyrics optional";
+  byId("capabilityStatus").title = capabilities.lyrics.available ? "FFmpeg and automatic lyric captions are ready" : capabilities.lyrics.message;
+  document.querySelector(".status-dot").classList.toggle("partial", !capabilities.lyrics.available);
+}).catch(() => {
+  byId("capabilityText").textContent = "Local processing";
+});

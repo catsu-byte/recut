@@ -1,11 +1,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createBlueprint, assignClips, chooseEffect, createEventPlan, macroBoundaries, detectImpact } = require("../electron/core/planner.cjs");
+const { createBlueprint, assignClips, chooseEffect, createEventPlan, macroBoundaries, detectImpact, nearestRhythmHit } = require("../electron/core/planner.cjs");
 const { createFcpxml, escapeXml } = require("../electron/core/exporters.cjs");
 const { selectDuration, parsePacketDuration, correlateEnvelopes } = require("../electron/core/media.cjs");
-const { montageDuration, outputProfile } = require("../electron/core/pipeline.cjs");
+const { montageDuration, outputProfile, encodingProfile, renderProject } = require("../electron/core/pipeline.cjs");
 const { createCaptionPlan, createLyricCaptionPlan, createAss } = require("../electron/core/captions.cjs");
 const { parseTimedLyrics, parseTimestamp } = require("../electron/core/lyrics.cjs");
+const { parseEditInstructions } = require("../electron/core/instructions.cjs");
+const { validateMedalUrl, extractMedalMediaUrl } = require("../electron/core/medal.cjs");
 
 test("blueprint keeps the requested montage duration", () => {
   const blueprint = createBlueprint({
@@ -229,4 +231,82 @@ test("timed lyrics parser reads LRC and SRT cues", () => {
   const srt = parseTimedLyrics("1\n00:00:02,000 --> 00:00:04,250\nExact words", 6);
   assert.deepEqual(srt, [{ start: 2, end: 4.25, text: "Exact words" }]);
   assert.equal(parseTimestamp("01:02:03,500"), 3723.5);
+});
+
+test("context instructions turn natural language into bounded editor preferences", () => {
+  const parsed = parseEditInstructions("Kills liegen immer am Ende jedes Clips, exakt auf dem Beat. Wasserzeichen entfernen.");
+  assert.equal(parsed.preferences.impactPosition, "end");
+  assert.equal(parsed.preferences.beatSync, "strict");
+  assert.equal(parsed.preferences.removeMedalWatermark, true);
+  assert.deepEqual(parsed.matched, ["impact-at-end", "strict-beat-sync", "remove-medal-watermark"]);
+});
+
+test("hit sync favors a nearby strong beat without leaving the clip window", () => {
+  const hit = nearestRhythmHit(4.7, 0, 5, [
+    { time: 4.5, strength: 0.25 }, { time: 4.82, strength: 0.95 }, { time: 5.1, strength: 1 }
+  ], "strict");
+  assert.equal(hit, 4.82);
+});
+
+test("double crystal taps receive a dedicated key-moment bonus", () => {
+  const result = detectImpact(8, [
+    { time: 5.1, strength: 0.82 }, { time: 5.31, strength: 0.78 }, { time: 6.4, strength: 0.9 }
+  ], [{ time: 5.28, score: 1 }, { time: 6.4, score: 0.25 }]);
+  assert.equal(result.type, "double-tap");
+  assert.ok(result.time >= 5.1 && result.time <= 5.31);
+});
+
+test("Medal import accepts clip pages and extracts only allowlisted media hosts", () => {
+  assert.equal(validateMedalUrl("https://medal.tv/games/minecraft/clips/abc?invite=x").hostname, "medal.tv");
+  assert.throws(() => validateMedalUrl("https://example.com/clips/abc"), /Only public HTTPS/);
+  const url = extractMedalMediaUrl('<meta property="og:video" content="https://cdn.medal.tv/videos/abc.mp4?x=1">');
+  assert.equal(url.hostname, "cdn.medal.tv");
+  assert.throws(() => extractMedalMediaUrl('<meta property="og:video" content="https://evil.test/abc.mp4">'), /No downloadable video/);
+});
+
+test("custom overlay font names are sanitized in ASS output", () => {
+  const ass = createAss({ captions: [], keywords: [] }, { width: 1280, height: 720, fontName: "My,Font\nBad", keywordFontName: "Impact Font" });
+  assert.match(ass, /Style: Caption,My Font Bad,/);
+  assert.match(ass, /Style: Keyword,Impact Font,/);
+});
+
+test("manual key-moment overrides are preserved by the event planner", () => {
+  const clips = [{
+    path: "manual.mp4", duration: 10,
+    onsets: [{ time: 7, strength: 1 }], candidates: [{ time: 7, score: 1 }]
+  }];
+  const result = createEventPlan({
+    duration: 10, cuts: [], onsets: [], clips,
+    preferences: { impactOverrides: { "manual.mp4": 2.35 } }
+  });
+  assert.equal(result.segments[0].impactTime, 2.35);
+  assert.equal(result.segments[0].keyMomentType, "manual");
+});
+
+test("editing presets change pacing and filler effects deterministically", () => {
+  const clips = [{
+    path: "style.mp4", duration: 20,
+    onsets: [{ time: 8, strength: 1 }], candidates: [{ time: 8, score: 1 }]
+  }];
+  const cinematic = createEventPlan({ duration: 10, cuts: [3, 6], onsets: [], clips, preferences: { editingStyle: "cinematic" } });
+  const aggressive = createEventPlan({ duration: 10, cuts: [3, 6], onsets: [], clips, preferences: { editingStyle: "aggressive" } });
+  assert.ok(cinematic.segments[0].speed < aggressive.segments[0].speed);
+  assert.equal(cinematic.segments[0].effect, "drift");
+  assert.equal(aggressive.segments[0].effect, "push");
+});
+
+test("render quality profiles expose fast review and master encodes", () => {
+  assert.deepEqual(encodingProfile("draft"), { preset: "veryfast", crf: 24, audioBitrate: "128k" });
+  assert.deepEqual(encodingProfile("master"), { preset: "slow", crf: 14, audioBitrate: "256k" });
+  assert.deepEqual(outputProfile([{ width: 3840, height: 2160, fps: 60 }], "16:9", "master"), {
+    width: 3840, height: 2160, fps: 60
+  });
+});
+
+test("a pre-cancelled render stops before touching media", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(renderProject({
+    referencePath: "reference.mp4", clipPaths: ["clip.mp4"], outputDirectory: "output"
+  }, () => {}, controller.signal), /Render cancelled/);
 });

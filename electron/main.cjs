@@ -1,6 +1,9 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, protocol, net } = require("electron");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const { inspectProject, renderProject, assertToolchain } = require("./core/pipeline.cjs");
+const { importMedalClip } = require("./core/medal.cjs");
+const { checkTranscriptionEngine } = require("./core/transcriber.cjs");
 
 const VIDEO_FILTERS = [
   { name: "Video", extensions: ["mp4", "mov", "mkv", "webm", "avi", "m4v"] }
@@ -9,10 +12,19 @@ const AUDIO_FILTERS = [
   { name: "Audio or video", extensions: ["mp3", "wav", "m4a", "aac", "flac", "ogg", "mp4", "mov", "mkv"] }
 ];
 const LYRICS_FILTERS = [
-  { name: "Timed lyrics", extensions: ["lrc", "srt"] }
+  { name: "Timed lyrics", extensions: ["lrc", "srt", "vtt"] }
 ];
+const FONT_FILTERS = [{ name: "Font", extensions: ["ttf", "otf"] }];
+const IMAGE_FILTERS = [{ name: "Overlay image", extensions: ["png", "webp", "jpg", "jpeg"] }];
 
 let mainWindow;
+let activeRenderController = null;
+const allowedPreviews = new Set();
+
+protocol.registerSchemesAsPrivileged([{
+  scheme: "recut-media",
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true }
+}]);
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -46,6 +58,11 @@ function pickFiles(options) {
 
 app.whenReady().then(async () => {
   await assertToolchain();
+  protocol.handle("recut-media", (request) => {
+    const filePath = decodeURIComponent(new URL(request.url).pathname.slice(1));
+    if (!allowedPreviews.has(filePath)) return new Response("Not found", { status: 404 });
+    return net.fetch(pathToFileURL(filePath).href);
+  });
   createWindow();
 
   ipcMain.handle("pick-reference", () =>
@@ -57,6 +74,12 @@ app.whenReady().then(async () => {
   ipcMain.handle("pick-lyrics", () =>
     pickFiles({ title: "Choose timed lyrics", filters: LYRICS_FILTERS, properties: ["openFile"] })
   );
+  ipcMain.handle("pick-font", () =>
+    pickFiles({ title: "Choose a custom overlay font", filters: FONT_FILTERS, properties: ["openFile"] })
+  );
+  ipcMain.handle("pick-overlay", () =>
+    pickFiles({ title: "Choose an overlay image", filters: IMAGE_FILTERS, properties: ["openFile"] })
+  );
   ipcMain.handle("pick-clips", () =>
     pickFiles({ title: "Choose gaming clips", filters: VIDEO_FILTERS, properties: ["openFile", "multiSelections"] })
   );
@@ -67,10 +90,34 @@ app.whenReady().then(async () => {
     });
     return canceled ? [] : filePaths;
   });
-  ipcMain.handle("inspect-project", (_event, input) => inspectProject(input));
-  ipcMain.handle("render-project", (_event, input) =>
-    renderProject(input, (payload) => mainWindow?.webContents.send("render-progress", payload))
+  ipcMain.handle("import-medal", (_event, url) =>
+    importMedalClip(url, path.join(app.getPath("userData"), "medal-imports"))
   );
+  ipcMain.handle("inspect-project", (_event, input) => inspectProject(input));
+  ipcMain.handle("capabilities", async () => ({
+    lyrics: await checkTranscriptionEngine(),
+    ffmpeg: true,
+    localOnly: true
+  }));
+  ipcMain.handle("render-project", async (_event, input) => {
+    if (activeRenderController) throw new Error("A render is already running.");
+    activeRenderController = new AbortController();
+    try {
+      const result = await renderProject(input, (payload) => mainWindow?.webContents.send("render-progress", payload), activeRenderController.signal);
+      allowedPreviews.add(result.previewPath);
+      return result;
+    } catch (error) {
+      if (error.name === "AbortError" || activeRenderController.signal.aborted) throw new Error("Render cancelled.");
+      throw error;
+    } finally {
+      activeRenderController = null;
+    }
+  });
+  ipcMain.handle("cancel-render", () => {
+    if (!activeRenderController) return false;
+    activeRenderController.abort();
+    return true;
+  });
   ipcMain.handle("reveal-output", (_event, filePath) => shell.showItemInFolder(filePath));
 
   app.on("activate", () => {

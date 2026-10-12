@@ -22,12 +22,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def clean_word(word: object) -> dict[str, object] | None:
+def clean_word(word: object, minimum_probability: float = 0.48) -> dict[str, object] | None:
     probability = float(getattr(word, "probability", 0.0) or 0.0)
     text = str(getattr(word, "word", "") or "").strip()
     # Game audio produces tempting but incorrect low-confidence syllables.
     # A stricter threshold keeps captions honest instead of filling silence.
-    if not text or probability < 0.48:
+    if not text or probability < minimum_probability:
         return None
     return {
         "text": text,
@@ -45,15 +45,11 @@ def transcribe(model: WhisperModel, media_path: str, language: str | None, song:
         word_timestamps=True,
         condition_on_previous_text=False,
         language=language,
-        initial_prompt=(
-            "Lemon Demon, Fine. Sung English lyrics."
-            if song else
-            "Gaming montage. Minecraft PvP, End Crystal, Totem, kill, dead."
-        ),
+        initial_prompt=None if song else "Gaming montage. Minecraft PvP, End Crystal, Totem, kill, dead.",
     )
     output_segments: list[dict[str, object]] = []
     for segment in segments:
-        words = [item for word in (segment.words or []) if (item := clean_word(word))]
+        words = [item for word in (segment.words or []) if (item := clean_word(word, 0.36 if song else 0.48))]
         text = " ".join(str(word["text"]) for word in words).strip()
         if not text or float(segment.no_speech_prob or 0.0) > 0.72:
             continue

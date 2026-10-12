@@ -32,9 +32,13 @@ async function transcribeMusicSection(audioPath, offset, duration, workingDirect
     "-c:a", "pcm_s16le", extractedPath
   ]);
   const python = process.env.RECUT_PYTHON || "python";
-  const model = process.env.RECUT_WHISPER_MODEL || "small.en";
+  const model = process.env.RECUT_WHISPER_MODEL || "small";
+  const language = process.env.RECUT_LYRIC_LANGUAGE?.trim();
   try {
-    const { stdout } = await run(python, [scriptPath(), "--model", model, "--language", "en", "--song", extractedPath]);
+    const args = [scriptPath(), "--model", model, "--song"];
+    if (language) args.push("--language", language);
+    args.push(extractedPath);
+    const { stdout } = await run(python, args);
     const [result] = JSON.parse(stdout.toString("utf8"));
     return { status: "ready", model, sectionPath: extractedPath, transcript: result };
   } catch (error) {
@@ -59,4 +63,14 @@ async function matchMusicSection(referencePath, musicPath, duration) {
   }
 }
 
-module.exports = { transcribeClips, transcribeMusicSection, matchMusicSection, scriptPath };
+async function checkTranscriptionEngine() {
+  const python = process.env.RECUT_PYTHON || "python";
+  try {
+    await run(python, ["-c", "import faster_whisper; print(faster_whisper.__version__)"]);
+    return { available: true, python };
+  } catch (error) {
+    return { available: false, python, message: "Install faster-whisper to enable automatic lyric captions." };
+  }
+}
+
+module.exports = { transcribeClips, transcribeMusicSection, matchMusicSection, checkTranscriptionEngine, scriptPath };

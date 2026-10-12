@@ -8,12 +8,19 @@ function unpackedPath(binaryPath) {
   return binaryPath.includes("app.asar") ? binaryPath.replace("app.asar", "app.asar.unpacked") : binaryPath;
 }
 
-const FFMPEG = unpackedPath(bundledFfmpeg) || "ffmpeg";
-const FFPROBE = unpackedPath(bundledFfprobe) || "ffprobe";
+function availableBinary(bundledPath, fallback) {
+  const candidate = unpackedPath(bundledPath);
+  return candidate && fs.existsSync(candidate) ? candidate : fallback;
+}
+
+const FFMPEG = availableBinary(bundledFfmpeg, "ffmpeg");
+const FFPROBE = availableBinary(bundledFfprobe, "ffprobe");
 
 function run(binary, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, { windowsHide: true, ...options });
+    const spawnOptions = { windowsHide: true, ...options };
+    if (!spawnOptions.signal) delete spawnOptions.signal;
+    const child = spawn(binary, args, spawnOptions);
     const stdout = [];
     const stderr = [];
     child.stdout?.on("data", (chunk) => stdout.push(chunk));
@@ -38,6 +45,7 @@ async function probe(filePath) {
   ]);
   const data = JSON.parse(stdout.toString("utf8"));
   const video = data.streams?.find((stream) => stream.codec_type === "video");
+  const audio = data.streams?.find((stream) => stream.codec_type === "audio");
   let duration;
   try {
     duration = selectDuration(data, filePath);
@@ -49,7 +57,8 @@ async function probe(filePath) {
     duration,
     width: Number(video?.width || 0),
     height: Number(video?.height || 0),
-    fps: parseRate(video?.r_frame_rate)
+    fps: parseRate(video?.r_frame_rate),
+    hasAudio: Boolean(audio)
   };
 }
 
@@ -244,6 +253,15 @@ async function motionWindows(filePath, duration) {
   return selected;
 }
 
+async function thumbnailDataUrl(filePath, time, width = 480) {
+  const { stdout } = await run(FFMPEG, [
+    "-hide_banner", "-loglevel", "error", "-ss", String(Math.max(0, Number(time) || 0)),
+    "-i", filePath, "-frames:v", "1", "-vf", `scale=${Math.max(160, Math.min(960, width))}:-2:flags=lanczos`,
+    "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"
+  ]);
+  return `data:image/jpeg;base64,${stdout.toString("base64")}`;
+}
+
 function assertPositiveDuration(duration, filePath) {
   if (!Number.isFinite(duration) || duration <= 0) {
     throw new Error(`Invalid media duration for ${filePath}. Re-export or remux this file and try again.`);
@@ -252,5 +270,5 @@ function assertPositiveDuration(duration, filePath) {
 
 module.exports = {
   run, probe, sceneCuts, audioOnsets, audioEnvelope, findAudioOffset, correlateEnvelopes,
-  motionWindows, selectDuration, parsePacketDuration, FFMPEG, FFPROBE
+  motionWindows, thumbnailDataUrl, selectDuration, parsePacketDuration, FFMPEG, FFPROBE
 };

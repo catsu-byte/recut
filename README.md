@@ -10,17 +10,30 @@ ReCut is a local-first desktop tool that turns pre-selected gaming highlights in
 
 - Reference scene-cut detection
 - Audio-onset and peak detection
+- Beat-aware hit alignment with a strict-sync instruction mode
 - Game-agnostic motion and audio-impact scoring for source clips
+- Double Crystal Tap (D-tap) scoring from paired audio transients plus visual motion
 - One intentional macro shot per selected highlight, ending just after the detected impact
 - Spectral music matching, resilient to bass boosts and game audio
-- Local song transcription with word timestamps
-- Optional LRC/SRT import for exact user-provided lyrics and timing
+- Language-auto-detected local song transcription with word timestamps
+- Optional LRC/SRT/VTT import for exact user-provided lyrics and timing
 - Continuous white lyric captions on a black background
 - Soft, semi-transparent 3D keywords with bundled Bebas Neue typography and directional light trails
 - Pre-impact grayscale pullback followed by RGB split, flash and micro-shake
 - Reference-cut subdivision, push, drift and glitch effects
 - Lanczos HD delivery, controlled sharpening and reduced saturation
 - 16:9 and 9:16 output
+- Public Medal.tv clip-link import with strict host validation and a 2 GB safety limit
+- Optional edge crop for watermarked Medal imports you own or have permission to edit
+- Custom TTF/OTF overlay fonts and PNG/WebP/JPG image overlays
+- Natural-language edit instructions for impact placement, strict beat sync, D-tap detection and Medal cropping
+- Human-review storyboard with a generated key-frame and editable impact marker for every clip
+- Reorderable/removable clip queue and persistent local project draft
+- Cinematic, Balanced and Aggressive editing presets with distinct pacing, effects and grading
+- Draft, High and Master render profiles from fast 540p review output through source-aware 4K delivery
+- Analysis caching so a reviewed project is not scanned again before rendering
+- In-app final-video preview and cancellable FFmpeg rendering
+- Adjustable game/music mix with limiting and a saved project draft
 - H.264 preview render with matched music and original clip audio
 - FCPXML timeline and JSON analysis report
 - Offline processing; clips never leave the computer
@@ -41,6 +54,17 @@ npm run dev
 ```
 
 Choose one reference edit and one or more gaming clips. An optional music file can replace the reference audio. Analysis works immediately; choose an output folder only when you are ready to render the montage.
+
+You can also paste a public Medal.tv clip link below the local clip picker. Imported files are cached in ReCut's user-data directory. Use the watermark crop only for clips you own or are authorized to modify; it applies a conservative centered edge crop because Medal author watermarks can be placed in any corner.
+
+The instruction field recognizes focused editing directives in English and German. Examples:
+
+- `Kills immer am Ende jedes Clips.`
+- `Sync impacts exactly to the beat.`
+- `Wasserzeichen entfernen.`
+- `No D-tap detection.`
+
+For custom fonts, select the font file and enter its internal family name (for example `Inter` rather than the filename). Image overlays are scaled to 18% of the output width and can be placed in any corner.
 
 ## Import into DaVinci Resolve Free
 

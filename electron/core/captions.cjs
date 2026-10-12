@@ -106,7 +106,7 @@ function groupWords(words) {
   }));
 }
 
-function createAss({ captions, keywords }, { width, height }) {
+function createAss({ captions, keywords }, { width, height, fontName = "Arial", keywordFontName = "Bebas Neue" }) {
   const baseSize = Math.max(18, Math.round(height * 0.052));
   const keywordSize = Math.max(46, Math.round(height * 0.17));
   const bottomMargin = Math.round(height * 0.075);
@@ -123,16 +123,20 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,Arial,${baseSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&HD0000000,-1,0,0,0,100,100,0,0,3,4,0,2,28,28,${bottomMargin},1
-Style: KeywordAura,Bebas Neue,${keywordSize},&H58705BFF,&H58705BFF,&H58705BFF,&H00000000,-1,0,0,0,100,100,1.8,0,1,8,0,5,20,20,20,1
-Style: KeywordTrail,Bebas Neue,${keywordSize},&H58624FFF,&H58624FFF,&H58624FFF,&H00000000,-1,0,0,0,100,100,1.8,0,1,0,0,5,20,20,20,1
-Style: KeywordDepth,Bebas Neue,${keywordSize},&H2446258A,&H2446258A,&H2446258A,&H00000000,-1,0,0,0,100,100,1.8,0,1,0,0,5,20,20,20,1
-Style: Keyword,Bebas Neue,${keywordSize},&H126876FF,&H126876FF,&H126876FF,&H00000000,-1,0,0,0,100,100,1.8,0,1,0,0,5,20,20,20,1
+Style: Caption,${sanitizeAssFont(fontName)},${baseSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&HD0000000,-1,0,0,0,100,100,0,0,3,4,0,2,28,28,${bottomMargin},1
+Style: KeywordAura,${sanitizeAssFont(keywordFontName)},${keywordSize},&H58705BFF,&H58705BFF,&H58705BFF,&H00000000,-1,0,0,0,100,100,1.8,0,1,8,0,5,20,20,20,1
+Style: KeywordTrail,${sanitizeAssFont(keywordFontName)},${keywordSize},&H58624FFF,&H58624FFF,&H58624FFF,&H00000000,-1,0,0,0,100,100,1.8,0,1,0,0,5,20,20,20,1
+Style: KeywordDepth,${sanitizeAssFont(keywordFontName)},${keywordSize},&H2446258A,&H2446258A,&H2446258A,&H00000000,-1,0,0,0,100,100,1.8,0,1,0,0,5,20,20,20,1
+Style: Keyword,${sanitizeAssFont(keywordFontName)},${keywordSize},&H126876FF,&H126876FF,&H126876FF,&H00000000,-1,0,0,0,100,100,1.8,0,1,0,0,5,20,20,20,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 ${events.join("\n")}
 `;
+}
+
+function sanitizeAssFont(value) {
+  return String(value || "Arial").replace(/[\r\n,]/g, " ").trim() || "Arial";
 }
 
 function keywordEvents(keyword, index, width, height) {
@@ -146,7 +150,7 @@ function keywordEvents(keyword, index, width, height) {
   const y = Math.round(height * palette.y);
   const direction = index % 2 ? 1 : -1;
   const startX = x + direction * 82;
-  const transform = `\\an5\\fnBebas Neue\\frz${palette.rotation}\\fscx82\\fscy82\\blur2.4\\t(0,165,\\fscx106\\fscy106\\blur0.25\\frz0)\\t(165,310,\\fscx100\\fscy100)\\fad(55,230)`;
+  const transform = `\\an5\\frz${palette.rotation}\\fscx82\\fscy82\\blur2.4\\t(0,165,\\fscx106\\fscy106\\blur0.25\\frz0)\\t(165,310,\\fscx100\\fscy100)\\fad(55,230)`;
   const movement = (offsetX = 0, offsetY = 0) => `\\move(${startX + offsetX},${y + 10 + offsetY},${x + offsetX},${y + offsetY},0,175)`;
   const text = escapeAss(keyword.text);
   return [

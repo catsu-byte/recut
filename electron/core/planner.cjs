@@ -117,7 +117,7 @@ function fallbackPick(pools, index) {
   return { clip, candidate: clip.candidates[index % clip.candidates.length] || { time: 0, score: 0 } };
 }
 
-function createEventPlan({ duration, cuts, onsets, clips }) {
+function createEventPlan({ duration, cuts, onsets, clips, preferences = {} }) {
   if (!clips.length) return { duration, segments: [], cuts: [], detectedSceneCuts: cuts.length, detectedBeats: onsets.length };
   const macro = macroBoundaries(duration, cuts, clips.length);
   const segments = [];
@@ -125,15 +125,31 @@ function createEventPlan({ duration, cuts, onsets, clips }) {
     const macroStart = macro[clipIndex];
     const macroEnd = macro[clipIndex + 1];
     const macroDuration = macroEnd - macroStart;
-    const impact = detectImpact(clip.duration, clip.onsets || [], clip.candidates || []);
-    const postRoll = Math.min(0.55, Math.max(0.25, macroDuration * 0.1));
-    const availableDuration = Math.min(clip.duration, macroDuration);
+    const overrideTime = Number(preferences.impactOverrides?.[clip.path]);
+    const impact = Number.isFinite(overrideTime)
+      ? { time: clamp(overrideTime, 0.05, Math.max(0.05, clip.duration - 0.05)), score: 1, motionScore: 1, type: "manual" }
+      : detectImpact(clip.duration, clip.onsets || [], clip.candidates || [], preferences);
+    const style = preferences.editingStyle || "balanced";
+    const postRoll = preferences.impactPosition === "end"
+      ? Math.min(0.1, macroDuration * 0.025)
+      : style === "aggressive" ? Math.min(0.32, Math.max(0.16, macroDuration * 0.065))
+        : style === "cinematic" ? Math.min(0.82, Math.max(0.42, macroDuration * 0.14))
+          : Math.min(0.55, Math.max(0.25, macroDuration * 0.1));
+    const speedFactor = style === "aggressive" ? 1.08 : style === "cinematic" ? 0.94 : 1;
+    const availableDuration = Math.min(clip.duration, macroDuration * speedFactor);
     const speed = availableDuration / macroDuration;
+    const idealHitTime = preferences.impactPosition === "center"
+      ? macroStart + macroDuration * 0.5
+      : macroEnd - postRoll;
+    const hitTime = preferences.impactPosition === "end"
+      ? idealHitTime
+      : nearestRhythmHit(idealHitTime, macroStart, macroEnd, onsets, preferences.beatSync);
     const macroSourceStart = clamp(
-      impact.time - availableDuration + postRoll,
+      impact.time - (hitTime - macroStart) * speed,
       0,
       Math.max(0, clip.duration - availableDuration)
     );
+    const mappedImpactTime = macroStart + (impact.time - macroSourceStart) / Math.max(speed, 0.00001);
     const internalCuts = cuts.filter((time) => time > macroStart + 0.28 && time < macroEnd - 0.28);
     const shotBoundaries = uniqueTimes([macroStart, ...internalCuts, macroEnd], 0.24);
     for (let shotIndex = 0; shotIndex < shotBoundaries.length - 1; shotIndex += 1) {
@@ -144,19 +160,28 @@ function createEventPlan({ duration, cuts, onsets, clips }) {
       const sourceEnd = sourceStart + sourceDuration;
       const containsImpact = impact.time >= sourceStart - 0.08 && impact.time <= sourceEnd + 0.08;
       const index = segments.length;
+      const fillerEffects = style === "aggressive"
+        ? ["push", "glitch", "shake"]
+        : style === "cinematic" ? ["drift", "clean", "push"] : ["push", "drift", "glitch"];
       segments.push({
         index,
         clipIndex,
         timelineStart,
         duration: segmentDuration,
         intensity: containsImpact ? impact.score : Math.max(0.3, impact.score * 0.62),
-        effect: containsImpact ? "impact" : ["push", "drift", "glitch"][index % 3],
+        effect: containsImpact ? "impact" : fillerEffects[index % fillerEffects.length],
+        editingStyle: style,
         sourcePath: clip.path,
         sourceName: path.basename(clip.path),
+        fromMedal: Boolean(clip.fromMedal),
+        hasAudio: clip.hasAudio !== false,
         sourceStart,
         sourceDuration,
         speed,
         impactTime: impact.time,
+        hitTargetTime: hitTime,
+        hitSyncError: Math.abs(mappedImpactTime - hitTime),
+        keyMomentType: impact.type,
         motionScore: impact.motionScore
       });
     }
@@ -185,7 +210,21 @@ function macroBoundaries(duration, cuts, clipCount) {
   return [0, ...selected.sort((a, b) => a - b), duration];
 }
 
-function detectImpact(duration, onsets, motionCandidates) {
+function nearestRhythmHit(ideal, start, end, onsets, mode = "balanced") {
+  const radius = mode === "strict" ? 1.2 : 0.55;
+  const candidates = onsets
+    .filter((beat) => beat.time >= start + 0.3 && beat.time <= end - 0.04)
+    .filter((beat) => Math.abs(beat.time - ideal) <= radius)
+    .map((beat) => ({
+      ...beat,
+      score: (beat.strength || 0) * (mode === "strict" ? 0.7 : 0.45)
+        + Math.max(0, 1 - Math.abs(beat.time - ideal) / radius) * (mode === "strict" ? 0.3 : 0.55)
+    }))
+    .sort((a, b) => b.score - a.score);
+  return candidates[0]?.time ?? ideal;
+}
+
+function detectImpact(duration, onsets, motionCandidates, preferences = {}) {
   const motionMaximum = Math.max(...motionCandidates.map((item) => item.score), 0.00001);
   const candidates = onsets
     // The final inventory/pickup sound is often the loudest event in a gaming
@@ -199,20 +238,29 @@ function detectImpact(duration, onsets, motionCandidates) {
       }, { distance: Infinity, score: 0 });
       const motionScore = (nearestMotion.score / motionMaximum) * Math.max(0, 1 - nearestMotion.distance / 1.1);
       const lateBias = onset.time / duration;
+      const pairedOnset = preferences.detectDoubleTaps === false ? null : onsets.find((other) => {
+        const gap = Math.abs(other.time - onset.time);
+        return other !== onset && gap >= 0.075 && gap <= 0.46 && other.strength >= 0.28;
+      });
+      const doubleTapScore = pairedOnset
+        ? Math.min(onset.strength, pairedOnset.strength) * Math.max(0, 1 - Math.abs(Math.abs(pairedOnset.time - onset.time) - 0.22) / 0.3)
+        : 0;
       return {
         time: onset.time,
-        score: onset.strength * 0.62 + motionScore * 0.28 + lateBias * 0.1,
-        motionScore
+        score: onset.strength * 0.52 + motionScore * 0.25 + lateBias * 0.08 + doubleTapScore * 0.15,
+        motionScore,
+        doubleTapScore,
+        type: doubleTapScore >= 0.18 ? "double-tap" : "impact"
       };
     });
   if (!candidates.length) {
-    const fallback = motionCandidates.sort((a, b) => b.time - a.time)[0];
-    return { time: fallback?.time || duration * 0.8, score: fallback?.score || 0, motionScore: fallback?.score || 0 };
+    const fallback = [...motionCandidates].sort((a, b) => b.score - a.score)[0];
+    return { time: fallback?.time || duration * 0.8, score: fallback?.score || 0, motionScore: fallback?.score || 0, type: "motion" };
   }
   return candidates.sort((a, b) => b.score - a.score)[0];
 }
 
 module.exports = {
   clamp, createBlueprint, assignClips, chooseEffect,
-  createEventPlan, macroBoundaries, detectImpact
+  createEventPlan, macroBoundaries, detectImpact, nearestRhythmHit
 };
